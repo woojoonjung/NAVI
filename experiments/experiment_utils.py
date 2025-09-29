@@ -72,7 +72,7 @@ def predict_masked_tokens(model, tokenizer, batch):
     """
     device = next(model.parameters()).device
 
-    # === ATLAS ===
+    # === NAVI ===
     if isinstance(model, NaviForMaskedLM):
         input_kwargs = {
             "input_ids": batch["input_ids"].to(device),
@@ -152,7 +152,7 @@ def evaluate_masked_prediction(dataset, model, tokenizer, collator, epoch):
     
 
 ######################## GET EMBEDDING ############################
-# === ATLAS, HAETAE, BERT ===
+# === NAVI, HAETAE, BERT ===
 def get_meanpooled_embedding(dataset, idx, model):
     # Create a copy of the data item to avoid modifying the original dataset
     if hasattr(dataset, '__getitem__'):

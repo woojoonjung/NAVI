@@ -8,7 +8,7 @@ import math
 
 # -----------------------------
 # Dataset classes for Navi
-# Ablation for "woSI" processed here
+# Ablation for "woSSI" processed here
 # -----------------------------
 class Segment:
     """
@@ -58,7 +58,7 @@ class Row:
 
         for segment in self.segments:
             current_segment_id += 1 # Increment segment id
-            if self.ablation_mode != "woSI" or current_segment_id == 1:
+            if self.ablation_mode != "woSSI" or current_segment_id == 1:
                 segment_pos = 1  # Reset inside each header-value segment
 
             header_tokens = tokenizer.tokenize(str(segment.header))

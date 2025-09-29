@@ -1,0 +1,190 @@
+{
+  "row_ids": ["row_id"],
+  "page_urls": ["page_url"],
+  "identifiers": ["identifier", "identifier.propertyid", "identifier.value"],
+  "url_scoped_fields": {
+    "base": ["url", "url.0", "url.1", "url.2"],
+    "names": ["url.name", "url.name.0", "url.name.1"],
+    "descriptions": ["url.description"],
+    "dates": ["url.datecreated", "url.datemodified", "url.uploaddate", "url.datepublished"],
+    "duration": ["url.duration"],
+    "genre": ["url.genre", "url.genre.0", "url.genre.1", "url.genre.2"],
+    "people_links": [
+      "url.director", "url.director.0", "url.director.1", "url.director.2",
+      "url.actor", "url.actor.0", "url.actor.1", "url.actor.2"
+    ],
+    "country_of_origin": [
+      "url.countryoforigin", "url.countryoforigin.0",
+      "url.countryoforigin.1", "url.countryoforigin.2"
+    ],
+    "language": ["url.inlanguage"]
+  },
+  "titles_and_descriptions": {
+    "titles": ["title", "headline"],
+    "names": ["name", "name.0", "name.1", "name.2"],
+    "alternate_names": ["alternatename", "alternatename.0", "alternatename.1"],
+    "descriptions": ["description", "description.0", "description.1", "description.2", "abstract", "text", "articlesection"],
+    "tags_keywords": ["tag", "tag.0", "tag.1", "tag.2", "keywords", "keywords.0", "keywords.1", "keywords.2"]
+  },
+  "actors": {
+    "collections": ["actor", "actors", "actor.0", "actor.1", "actor.2"],
+    "names": [
+      "actor.name", "actor.name.0", "actor.name.1", "actor.name.2",
+      "actors.0.name", "actors.1.name", "actors.2.name"
+    ],
+    "given_names": ["actor.givenname", "actor.0.givenname", "actor.1.givenname", "actor.2.givenname"],
+    "family_names": [
+      "actor.familyname", "actor.0.familyname", "actor.1.familyname", "actor.2.familyname"
+    ],
+    "roles_in_film": [
+      "actor.charactername", "actor.0.charactername", "actor.1.charactername", "actor.2.charactername"
+    ],
+    "descriptions": [
+      "actor.description", "actor.0.description", "actor.1.description", "actor.2.description",
+      "actors.0.description", "actors.1.description", "actors.description"
+    ],
+    "urls": ["actor.url", "actor.0.url", "actor.1.url", "actor.2.url"],
+    "birth_death_dates": [
+      "actor.birthdate", "actor.0.birthdate", "actor.1.birthdate", "actor.2.birthdate",
+      "actors.birthdate", "actors.0.birthdate", "actors.1.birthdate", "actors.2.birthdate",
+      "actors.0.deathdate"
+    ],
+    "birth_places": ["actors.birthplace", "actors.0.birthplace", "actors.1.birthplace", "actors.2.birthplace"],
+    "physical": ["actor.height", "actor.0.height", "actor.1.height"],
+    "aliases": ["actor.alternatename", "actor.0.alternatename", "actor.1.alternatename"]
+  },
+  "directors": {
+    "collections": ["director", "directors", "director.0", "director.1", "director.2"],
+    "names": [
+      "director.name", "director.name.0", "director.name.1", "director.name.2",
+      "directors.name", "directors.0.name", "directors.1.name", "directors.2.name"
+    ],
+    "given_names": ["director.givenname", "director.0.givenname", "director.1.givenname"],
+    "family_names": [
+      "director.familyname", "director.0.familyname", "director.1.familyname", "director.2.familyname"
+    ],
+    "descriptions": ["director.description"],
+    "urls": ["director.url", "director.0.url", "director.1.url", "director.2.url"],
+    "birth_dates": ["director.birthdate", "director.0.birthdate"],
+    "physical": ["director.height", "director.0.height"],
+    "aliases": ["director.alternatename", "director.0.alternatename"]
+  },
+  "contributors_and_crew": {
+    "authors": ["author", "author.name", "author.0.name", "author.1.name", "author.2.name", "author.name.0", "author.name.1", "author.name.2"],
+    "editors": ["editor", "editor.name", "editor.0.name", "editor.1.name", "editor.2.name"],
+    "contributors": ["contributor", "contributor.name", "contributor.0.name", "contributor.1.name", "contributor.2.name"],
+    "creators": ["creator", "creator.name", "creator.0.name", "creator.1.name", "creator.2.name"],
+    "producers": ["producer", "producer.name", "producer.0.name", "producer.1.name", "producer.2.name"],
+    "music": [
+      "musicby",
+      "musicby.name", "musicby.name.0", "musicby.name.1", "musicby.name.2",
+      "musicby.0.name", "musicby.1.name", "musicby.2.name"
+    ],
+    "cinematography": ["cinematographer"],
+    "publishers": ["publisher", "publisher.name", "publisher.alternatename"]
+  },
+  "date_and_time": {
+    "created_modified": ["datecreated", "datemodified"],
+    "published": ["datepublished", "datepublished.0", "datepublished.1", "datepublished.2"],
+    "released_events": ["releasedevent", "releasedevent.startdate", "releasedevent.0.startdate", "releasedevent.1.startdate", "releasedevent.2.startdate"],
+    "reviews": ["review.datecreated", "review.0.datecreated", "review.datepublished", "review.0.datepublished", "review.datemodified"],
+    "uploads": ["uploaddate", "video.uploaddate", "subjectof.uploaddate", "trailer.uploaddate", "trailer.0.uploaddate"],
+    "other": ["expires", "copyrightyear"]
+  },
+  "ratings_and_reviews": {
+    "aggregate_rating_block": ["aggregaterating"],
+    "values": ["aggregaterating.ratingvalue", "aggregaterating.0.ratingvalue"],
+    "counts": ["aggregaterating.ratingcount", "aggregaterating.0.ratingcount", "ratingcount", "commentcount"],
+    "review_counts": [
+      "aggregaterating.reviewcount",
+      "aggregaterating.0.reviewcount.0",
+      "aggregaterating.0.reviewcount.1",
+      "aggregaterating.reviewcount.0",
+      "aggregaterating.reviewcount.1"
+    ],
+    "scales": [
+      "aggregaterating.bestrating", "aggregaterating.0.bestrating", "bestrating",
+      "aggregaterating.worstrating", "aggregaterating.0.worstrating", "worstrating"
+    ],
+    "semantics": ["aggregaterating.itemreviewed", "aggregaterating.0.itemreviewed", "aggregaterating.description", "aggregaterating.ratingexplanation"],
+    "links": ["aggregaterating.url", "aggregaterating.name"],
+    "reviews_block": ["review", "review.0", "review.1"],
+    "review_texts": ["reviewbody", "review.0.reviewbody", "review.1.reviewbody", "review.description", "review.headline", "review.name"],
+    "review_authors": ["review.author", "review.0.author", "review.1.author"],
+    "review_lang": ["review.inlanguage", "review.0.inlanguage"]
+  },
+  "media": {
+    "trailer_block": ["trailer", "trailer.0"],
+    "trailer_names": ["trailer.name", "trailer.0.name"],
+    "trailer_desc": ["trailer.description", "trailer.0.description"],
+    "trailer_duration": ["trailer.duration"],
+    "trailer_thumbnails": ["trailer.thumbnailurl"],
+    "trailer_formats": ["trailer.encodingformat", "trailer.0.encodingformat"],
+    "trailer_urls": ["trailer.contenturl", "trailer.0.contenturl"],
+    "video_block": ["video"],
+    "video_fields": [
+      "video.name", "video.description", "video.thumbnailurl",
+      "video.embedurl", "video.duration", "video.playertype",
+      "video.interactioncount", "video.author"
+    ],
+    "images_block": ["image", "image.0"],
+    "image_dimensions": ["image.width", "image.0.width", "image.height", "image.0.height"],
+    "image_caption": ["image.caption", "image.0.caption"],
+    "image_flags": ["image.representativeofpage"],
+    "page_thumbnail": ["thumbnailurl"]
+  },
+  "production_and_origin": {
+    "companies": [
+      "productioncompany",
+      "productioncompany.name",
+      "productioncompany.0.name",
+      "productioncompany.1.name",
+      "productioncompany.2.name"
+    ],
+    "country_of_origin": [
+      "countryoforigin", "countryoforigin.0", "countryoforigin.1", "countryoforigin.2",
+      "countryoforigin.name", "countryoforigin.0.name", "countryoforigin.1.name", "countryoforigin.2.name"
+    ]
+  },
+  "language_and_accessibility": {
+    "inlanguage_block": ["inlanguage", "inlanguage.name", "inlanguage.0.name", "inlanguage.1.name", "inlanguage.2.name"],
+    "subtitles": [
+      "subtitlelanguage", "subtitlelanguage.name",
+      "subtitlelanguage.0.name", "subtitlelanguage.1.name", "subtitlelanguage.2.name"
+    ]
+  },
+  "offers_and_pricing": {
+    "offers_block": ["offers"],
+    "counts": ["offers.offercount", "offers.0.offercount"],
+    "prices": ["offers.price", "offers.0.price", "offers.lowprice", "offers.0.lowprice", "offers.highprice", "offers.0.highprice"],
+    "currency": ["offers.pricecurrency", "offers.0.pricecurrency"],
+    "condition": ["offers.itemcondition", "offers.0.itemcondition"],
+    "urls": ["offers.url", "offers.0.url"],
+    "availability": ["offers.availability", "offers.0.availability"]
+  },
+  "entities_and_links": {
+    "sameas_block": [
+      "sameas", "sameas.0", "sameas.1", "sameas.2",
+      "sameas.name", "sameas.name.0", "sameas.name.1",
+      "sameas.description", "sameas.duration", "sameas.genre",
+      "sameas.datecreated", "sameas.datepublished"
+    ],
+    "main_entity_of_page": [
+      "mainentityofpage",
+      "mainentityofpage.name", "mainentityofpage.name.0", "mainentityofpage.name.1",
+      "mainentityofpage.description", "mainentityofpage.articlebody", "mainentityofpage.inlanguage"
+    ],
+    "subjectof_block": ["subjectof", "subjectof.name", "subjectof.description"]
+  },
+  "other_properties": {
+    "duration": ["duration"],
+    "genre": ["genre", "genre.0", "genre.1", "genre.2"],
+    "content_rating": ["contentrating"],
+    "family_friendly": ["isfamilyfriendly"],
+    "position": ["position"],
+    "awards": ["award"],
+    "age_range": ["typicalagerange"],
+    "actions": ["potentialaction", "potentialaction.target", "potentialaction.startoffset-input"],
+    "video_name_alias": ["video.name"]
+  }
+}

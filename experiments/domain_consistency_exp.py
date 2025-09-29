@@ -325,7 +325,7 @@ def main():
     parser = argparse.ArgumentParser(description="Run lexical consistency experiments.")
     parser.add_argument('--artifacts_dir', type=Path, default='artifacts/lexvar', help="Directory to save artifacts.")
     parser.add_argument('--domains', type=str, nargs='+', default=['Quarter_Movie_top100_cleaned', 'Quarter_Product_top100_cleaned'], help="List of domains to process.")
-    parser.add_argument('--models', type=str, nargs='+', default=['bert', 'tapas', 'haetae', 'atlas'], help="Models to run.")
+    parser.add_argument('--models', type=str, nargs='+', default=['bert', 'tapas', 'haetae', 'navi'], help="Models to run.")
     parser.add_argument('--ablation_mode', action='store_true', help="Enable ablation mode for complex model names.")
     parser.add_argument('--ablation_models', type=str, nargs='+', help="List of ablation model names to run (only used when --ablation_mode is set).")
     

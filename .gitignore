@@ -63,3 +63,6 @@ data/
 *.pt
 *.pth
 *.ckpt
+
+# Allow canonical sets files in artifacts/lexvar
+!artifacts/lexvar/canonical_final_*.json

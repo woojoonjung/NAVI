@@ -14,10 +14,10 @@ import pyarrow.parquet as pq
 # Model imports
 from transformers import BertForMaskedLM, BertTokenizer, TapasForMaskedLM, TapasConfig, BertConfig
 from baselines.haetae.model import HAETAE
-from model.atlas import AtlasForMaskedLM
+from model.navi import NaviForMaskedLM
 
 # Dataset imports
-from dataset.dataset import AtlasDataset, BertDataset, TapasDataset, HaetaeDataset
+from dataset.dataset import NaviDataset, BertDataset, TapasDataset, HaetaeDataset
 
 # Utils
 from experiments.experiment_utils import extract_header_value_embeddings_from_positions
@@ -41,7 +41,7 @@ def get_model_path(model_name: str, domain: str, ablation_mode: bool = False) ->
             'bert': f'./models/bert_quarter_{domain}/epoch_2',
             'tapas': f'./models/tapas_quarter_{domain}/epoch_2',
             'haetae': f'./models/haetae_quarter_{domain}/epoch_2',
-            'atlas': f'./models/atlas_quarter_{domain}/epoch_2'
+            'navi': f'./models/navi_{domain}/epoch_2'
         }
         return model_path_map.get(model_name)
 
@@ -53,8 +53,12 @@ def get_base_model_name(model_name: str, ablation_mode: bool = False) -> str:
     """
     if ablation_mode:
         # Infer base model from ablation model name
-        if 'woED' in model_name or 'woSI' in model_name or 'woSMLM' in model_name or 'full_' in model_name:
-            return 'atlas'  # All ablation models appear to be ATLAS variants
+        # Check for new naming convention from pretrain_navi.sh: navi_{domain}_{ablation}
+        if 'navi_' in model_name and ('woESA' in model_name or 'woSSI' in model_name or 'woMSM' in model_name):
+            return 'navi'  # All ablation models appear to be NAVI variants
+        # Check for old naming convention for backward compatibility
+        elif 'woESA' in model_name or 'woSSI' in model_name or 'woMSM' in model_name or 'full_' in model_name:
+            return 'navi'  # All ablation models appear to be NAVI variants
         else:
             raise ValueError(f"Cannot determine base model for ablation model: {model_name}")
     else:
@@ -80,8 +84,8 @@ def load_model(model_name: str, domain: str, ablation_mode: bool = False):
         model = TapasForMaskedLM.from_pretrained(model_path, local_files_only=True)
     elif base_model_name == 'haetae':
         model = HAETAE(config, tokenizer, model_path)
-    elif base_model_name == 'atlas':
-        model = AtlasForMaskedLM(model_path)
+    elif base_model_name == 'navi':
+        model = NaviForMaskedLM(model_path)
     else:
         raise ValueError(f"Unknown base model name: {base_model_name}")
     
@@ -96,8 +100,8 @@ def get_contextualized_header_embedding(row_json: dict, header: str, model, mode
     """
     base_model_name = get_base_model_name(model_name, ablation_mode)
     
-    if base_model_name == 'atlas':
-        dataset = AtlasDataset([row_json])
+    if base_model_name == 'navi':
+        dataset = NaviDataset([row_json])
     elif base_model_name == 'bert':
         dataset = BertDataset([row_json], mode="masked_prediction")
     elif base_model_name == 'tapas':
@@ -110,7 +114,7 @@ def get_contextualized_header_embedding(row_json: dict, header: str, model, mode
     data_item = dataset[0]
     
     allowed_keys = {
-        'atlas': ['input_ids', 'attention_mask', 'position_ids', 'segment_ids', 'header_strings'],
+        'navi': ['input_ids', 'attention_mask', 'position_ids', 'segment_ids', 'header_strings'],
         'bert': ['input_ids', 'attention_mask'],
         'tapas': ['input_ids', 'attention_mask', 'token_type_ids'],
         'haetae': ['input_ids', 'attention_mask', 'key_positions']
@@ -119,7 +123,7 @@ def get_contextualized_header_embedding(row_json: dict, header: str, model, mode
     inputs = {k: (v.unsqueeze(0).to(device) if isinstance(v, torch.Tensor) else ([v] if isinstance(v, list) and k=='header_strings' else v)) for k, v in data_item.items() if k in allowed_keys}
 
     with torch.no_grad():
-        if base_model_name == 'atlas':
+        if base_model_name == 'navi':
             outputs = model(**inputs)
             last_hidden = outputs[0]
         elif base_model_name == 'haetae':
@@ -250,7 +254,7 @@ def main():
     parser.add_argument('--data_dir', type=Path, default='data', help="Directory containing the domain data.")
     parser.add_argument('--artifacts_dir', type=Path, default='artifacts/lexvar', help="Directory to save artifacts.")
     parser.add_argument('--domains', type=str, nargs='+', default=['Quarter_Movie_top100_cleaned', 'Quarter_Product_top100_cleaned'], help="List of domains to process.")
-    parser.add_argument('--models', type=str, nargs='+', default=['bert', 'tapas', 'haetae', 'atlas'], help="Models to run.")
+    parser.add_argument('--models', type=str, nargs='+', default=['bert', 'tapas', 'haetae', 'navi'], help="Models to run.")
     parser.add_argument('--ablation_mode', action='store_true', help="Enable ablation mode for complex model names.")
     parser.add_argument('--ablation_models', type=str, nargs='+', help="List of ablation model names to run (only used when --ablation_mode is set).")
     

@@ -24,11 +24,11 @@ transformers_logging.set_verbosity_error()
 warnings.filterwarnings("ignore")
 
 from experiment_utils import evaluate_masked_prediction, load_data
-from dataset.dataset import AtlasDataset, BertDataset, HaetaeDataset, TapasDataset
+from dataset.dataset import NaviDataset, BertDataset, HaetaeDataset, TapasDataset
 from dataset.collator import CollatorForMaskedPrediction
 from dataset.preprocess import clean_table_data
 
-from model.atlas import AtlasForMaskedLM
+from model.navi import NaviForMaskedLM
 from baselines.haetae.model import HAETAE
 from transformers import BertTokenizer, BertForMaskedLM, AutoTokenizer, TapasForMaskedLM, BertConfig
 
@@ -43,27 +43,27 @@ def load_baseline_models(tokenizer):
     config = BertConfig.from_pretrained('bert-base-uncased')
 
     # Baseline models - using trained versions
-    models['bert_movie'] = BertForMaskedLM.from_pretrained('./models/bert_quarter_movie/epoch_2', local_files_only=True)
+    models['bert_movie'] = BertForMaskedLM.from_pretrained('./models/bert_movie/epoch_2', local_files_only=True)
     models['bert_movie'] = models['bert_movie'].to(device)
     models['bert_movie'].eval()
 
-    models['bert_product'] = BertForMaskedLM.from_pretrained('./models/bert_quarter_product/epoch_2', local_files_only=True)
+    models['bert_product'] = BertForMaskedLM.from_pretrained('./models/bert_product/epoch_2', local_files_only=True)
     models['bert_product'] = models['bert_product'].to(device)
     models['bert_product'].eval()
 
-    models['haetae_product'] = HAETAE(config, tokenizer, "./models/haetae_quarter_product/epoch_2")
+    models['haetae_product'] = HAETAE(config, tokenizer, "./models/haetae_product/epoch_2")
     models['haetae_product'] = models['haetae_product'].to(device)
     models['haetae_product'].eval()
 
-    models['haetae_movie'] = HAETAE(config, tokenizer, "./models/haetae_quarter_movie/epoch_2")
+    models['haetae_movie'] = HAETAE(config, tokenizer, "./models/haetae_movie/epoch_2")
     models['haetae_movie'] = models['haetae_movie'].to(device)
     models['haetae_movie'].eval()
 
-    models['tapas_movie'] = TapasForMaskedLM.from_pretrained('./models/tapas_quarter_movie/epoch_2', local_files_only=True)
+    models['tapas_movie'] = TapasForMaskedLM.from_pretrained('./models/tapas_movie/epoch_2', local_files_only=True)
     models['tapas_movie'] = models['tapas_movie'].to(device)
     models['tapas_movie'].eval()
 
-    models['tapas_product'] = TapasForMaskedLM.from_pretrained('./models/tapas_quarter_product/epoch_2', local_files_only=True)
+    models['tapas_product'] = TapasForMaskedLM.from_pretrained('./models/tapas_product/epoch_2', local_files_only=True)
     models['tapas_product'] = models['tapas_product'].to(device)
     models['tapas_product'].eval()
     
@@ -74,25 +74,19 @@ def load_ablation_models(tokenizer):
     models = {}
     config = BertConfig.from_pretrained('bert-base-uncased')
     
-    domains = ['Movie', 'Product']
-    hv_values = ['0p8']
-    align_values = ['0p5']
-    vr_values = ['0p5']
-    ablation_values = ['woSI', 'woSMLM', 'woED']
+    domains = ['movie', 'product']
+    ablation_values = ['woSSI', 'woMSM', 'woESA']
 
     for domain in domains:
-        for hv in hv_values:
-            for align in align_values:
-                for vr in vr_values:
-                    for ablation in ablation_values:
-                        model_path = f'./models/{ablation}_Quarter_{domain}_HVB_hv{hv}_align{align}_vr{vr}/epoch_2'
-                        if os.path.exists(model_path):
-                            model_name = f'{ablation}_{domain.lower()}_hv{hv}_align{align}_vr{vr}'
-                            models[model_name] = AtlasForMaskedLM(model_path, ablation_mode=ablation)
-                            models[model_name] = models[model_name].to(device)
-                            models[model_name].eval()
-                        else:
-                            print(f"⚠️  Model not found: {model_path}")
+        for ablation in ablation_values:
+            model_path = f'./models/navi_{domain}_{ablation}/epoch_2'
+            if os.path.exists(model_path):
+                model_name = f'navi_{domain}_{ablation}'
+                models[model_name] = NaviForMaskedLM(model_path, ablation_mode=ablation)
+                models[model_name] = models[model_name].to(device)
+                models[model_name].eval()
+            else:
+                print(f"⚠️  Model not found: {model_path}")
     
     return models
 
@@ -100,20 +94,47 @@ def load_hyperparam_models_batch(tokenizer, hv_value, domain):
     """Load hyperparameter models for a specific hv value and domain"""
     models = {}
     
-    # Based on the images, we have these parameter combinations:
-    align_values = ['0p5']
-    vr_values = ['0p5']
+    # Convert domain to lowercase to match training script naming
+    domain_lower = domain.lower()
     
+    # Alignment weight variants
+    align_values = ['0p25', '0p5', '1p0', '2p0', '4p0']
     for align in align_values:
-        for vr in vr_values:
-            model_path = f'./models/full_Quarter_{domain}_HVB_hv{hv_value}_align{align}_vr{vr}/epoch_2'
-            if os.path.exists(model_path):
-                model_name = f'atlas_{domain.lower()}_hv{hv_value}_align{align}_vr{vr}'
-                models[model_name] = AtlasForMaskedLM(model_path)
-                models[model_name] = models[model_name].to(device)
-                models[model_name].eval()
-            else:
-                print(f"⚠️  Model not found: {model_path}")
+        model_path = f'./models/navi_{domain_lower}_align{align}/epoch_2'
+        if os.path.exists(model_path):
+            model_name = f'navi_{domain_lower}_align{align}'
+            models[model_name] = NaviForMaskedLM(model_path)
+            models[model_name] = models[model_name].to(device)
+            models[model_name].eval()
+        else:
+            print(f"⚠️  Model not found: {model_path}")
+    
+    # HV weight & Value ratio variants
+    hv_vr_combinations = [
+        ('0p8', '0p25'), ('0p8', '0p75'), 
+        ('0p4', '0p25'), ('0p4', '0p5'), ('0p4', '0p75')
+    ]
+    for hv, vr in hv_vr_combinations:
+        model_path = f'./models/navi_{domain_lower}_hv{hv}_vr{vr}/epoch_2'
+        if os.path.exists(model_path):
+            model_name = f'navi_{domain_lower}_hv{hv}_vr{vr}'
+            models[model_name] = NaviForMaskedLM(model_path)
+            models[model_name] = models[model_name].to(device)
+            models[model_name].eval()
+        else:
+            print(f"⚠️  Model not found: {model_path}")
+    
+    # Tau variants
+    tau_values = ['0p07', '0p1']
+    for tau in tau_values:
+        model_path = f'./models/navi_{domain_lower}_tau{tau}/epoch_2'
+        if os.path.exists(model_path):
+            model_name = f'navi_{domain_lower}_tau{tau}'
+            models[model_name] = NaviForMaskedLM(model_path)
+            models[model_name] = models[model_name].to(device)
+            models[model_name].eval()
+        else:
+            print(f"⚠️  Model not found: {model_path}")
     
     return models
 
@@ -206,25 +227,25 @@ def evaluate_hyperparams(dataset, tokenizer, collator, domain):
     
     results = {}
     
-    # # First batch: hv0p4 (15 variants)
-    # print("\n=== Evaluating hv0p4 variants ===")
-    # hv0p4_models = load_hyperparam_models_batch(tokenizer, '0p4', domain)
+    # First batch: hv0p4 (15 variants)
+    print("\n=== Evaluating hv0p4 variants ===")
+    hv0p4_models = load_hyperparam_models_batch(tokenizer, '0p4', domain)
     
-    # for model_name, model in hv0p4_models.items():
-    #     print(f"\n{model_name}")
-    #     print("Header:")
-    #     header_acc = evaluate_masked_prediction(dataset, model, tokenizer, collator, epoch=1)
-    #     print("Value:")
-    #     value_acc = evaluate_masked_prediction(dataset, model, tokenizer, collator, epoch=5)
+    for model_name, model in hv0p4_models.items():
+        print(f"\n{model_name}")
+        print("Header:")
+        header_acc = evaluate_masked_prediction(dataset, model, tokenizer, collator, epoch=1)
+        print("Value:")
+        value_acc = evaluate_masked_prediction(dataset, model, tokenizer, collator, epoch=5)
         
-    #     results[model_name] = {
-    #         'header_accuracy': header_acc,
-    #         'value_accuracy': value_acc
-    #     }
+        results[model_name] = {
+            'header_accuracy': header_acc,
+            'value_accuracy': value_acc
+        }
     
-    # # Clear memory after first batch
-    # del hv0p4_models
-    # clear_memory()
+    # Clear memory after first batch
+    del hv0p4_models
+    clear_memory()
     
     # Second batch: hv0p8 (15 variants)
     print("\n=== Evaluating hv0p8 variants ===")
@@ -291,12 +312,12 @@ def main():
 
     # Prepare datasets
     if args.domain == 'Product':
-        atlas_dataset = AtlasDataset(product_json)
+        navi_dataset = NaviDataset(product_json)
         bert_dataset = BertDataset(product_json_flat, mode="masked_prediction")
         haetae_dataset = HaetaeDataset(product_json_flat)
         tapas_dataset = TapasDataset(product_json_flat, mode="masked_prediction")
     else:  # Movie
-        atlas_dataset = AtlasDataset(movie_json)
+        navi_dataset = NaviDataset(movie_json)
         bert_dataset = BertDataset(movie_json_flat, mode="masked_prediction")
         haetae_dataset = HaetaeDataset(movie_json_flat)
         tapas_dataset = TapasDataset(movie_json_flat, mode="masked_prediction")
@@ -318,10 +339,10 @@ def main():
         
     elif args.model == 'ablations':
         models = load_ablation_models(tokenizers[0])
-        evaluate_ablations(atlas_dataset, models, tokenizers[0], collators[0], args.domain)
+        evaluate_ablations(navi_dataset, models, tokenizers[0], collators[0], args.domain)
         
     elif args.model == 'hyperparams':
-        results = evaluate_hyperparams(atlas_dataset, tokenizers[0], collators[0], args.domain)
+        results = evaluate_hyperparams(navi_dataset, tokenizers[0], collators[0], args.domain)
         
         # Print summary of results
         print(f"\n=== Summary for {args.domain} Hyperparameter Evaluation ===")

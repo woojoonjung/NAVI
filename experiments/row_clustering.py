@@ -56,42 +56,42 @@ tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
 
 
 def load_baseline_models(tokenizer):
-    """Load baseline models (BERT, HAETAE, TAPAS, ATLAS)"""
+    """Load baseline models (BERT, HAETAE, TAPAS, NAVI)"""
     models = {}
     
     # Config
     config = BertConfig.from_pretrained('bert-base-uncased')
 
     # Baseline models - using trained versions
-    models['bert_movie'] = BertForMaskedLM.from_pretrained('./models/bert_quarter_movie/epoch_2', local_files_only=True)
+    models['bert_movie'] = BertForMaskedLM.from_pretrained('./models/bert_movie/epoch_2', local_files_only=True)
     models['bert_movie'] = models['bert_movie'].to(device)
     models['bert_movie'].eval()
 
-    models['bert_product'] = BertForMaskedLM.from_pretrained('./models/bert_quarter_product/epoch_2', local_files_only=True)
+    models['bert_product'] = BertForMaskedLM.from_pretrained('./models/bert_product/epoch_2', local_files_only=True)
     models['bert_product'] = models['bert_product'].to(device)
     models['bert_product'].eval()
 
-    models['haetae_product'] = HAETAE(config, tokenizer, "./models/haetae_quarter_product/epoch_2")
+    models['haetae_product'] = HAETAE(config, tokenizer, "./models/haetae_product/epoch_2")
     models['haetae_product'] = models['haetae_product'].to(device)
     models['haetae_product'].eval()
 
-    models['haetae_movie'] = HAETAE(config, tokenizer, "./models/haetae_quarter_movie/epoch_2")
+    models['haetae_movie'] = HAETAE(config, tokenizer, "./models/haetae_movie/epoch_2")
     models['haetae_movie'] = models['haetae_movie'].to(device)
     models['haetae_movie'].eval()
 
-    models['tapas_movie'] = TapasForMaskedLM.from_pretrained('./models/tapas_quarter_movie/epoch_2', local_files_only=True)
+    models['tapas_movie'] = TapasForMaskedLM.from_pretrained('./models/tapas_movie/epoch_2', local_files_only=True)
     models['tapas_movie'] = models['tapas_movie'].to(device)
     models['tapas_movie'].eval()
 
-    models['tapas_product'] = TapasForMaskedLM.from_pretrained('./models/tapas_quarter_product/epoch_2', local_files_only=True)
+    models['tapas_product'] = TapasForMaskedLM.from_pretrained('./models/tapas_product/epoch_2', local_files_only=True)
     models['tapas_product'] = models['tapas_product'].to(device)
     models['tapas_product'].eval()
 
-    models['navi_movie'] = NaviForMaskedLM('./models/full_Quarter_Movie_HVB_hv0p8_align0p5_vr0p5/epoch_2')
+    models['navi_movie'] = NaviForMaskedLM('./models/navi_movie/epoch_2')
     models['navi_movie'] = models['navi_movie'].to(device)
     models['navi_movie'].eval()
     
-    models['navi_product'] = NaviForMaskedLM('./models/full_Quarter_Product_HVB_hv0p8_align0p5_vr0p5/epoch_2')
+    models['navi_product'] = NaviForMaskedLM('./models/navi_product/epoch_2')
     models['navi_product'] = models['navi_product'].to(device)
     models['navi_product'].eval()
     
@@ -102,25 +102,19 @@ def load_ablation_models(tokenizer):
     models = {}
     config = BertConfig.from_pretrained('bert-base-uncased')
     
-    domains = ['Movie', 'Product']
-    hv_values = ['0p8']
-    align_values = ['0p5']
-    vr_values = ['0p5']
-    ablation_values = ['woSI', 'woSMLM', 'woED']
+    domains = ['movie', 'product']
+    ablation_values = ['woSSI', 'woMSM', 'woESA']
 
     for domain in domains:
-        for hv in hv_values:
-            for align in align_values:
-                for vr in vr_values:
-                    for ablation in ablation_values:
-                        model_path = f'./models/{ablation}_Quarter_{domain}_HVB_hv{hv}_align{align}_vr{vr}/epoch_2'
-                        if os.path.exists(model_path):
-                            model_name = f'{ablation}_{domain.lower()}_hv{hv}_align{align}_vr{vr}'
-                            models[model_name] = NaviForMaskedLM(model_path, ablation_mode=ablation)
-                            models[model_name] = models[model_name].to(device)
-                            models[model_name].eval()
-                        else:
-                            print(f"⚠️  Model not found: {model_path}")
+        for ablation in ablation_values:
+            model_path = f'./models/navi_{domain}_{ablation}/epoch_2'
+            if os.path.exists(model_path):
+                model_name = f'navi_{domain}_{ablation}'
+                models[model_name] = NaviForMaskedLM(model_path, ablation_mode=ablation)
+                models[model_name] = models[model_name].to(device)
+                models[model_name].eval()
+            else:
+                print(f"⚠️  Model not found: {model_path}")
     
     return models
 
@@ -128,21 +122,47 @@ def load_hyperparam_models_batch(tokenizer, hv_value, domain):
     """Load hyperparameter models for a specific hv value and domain"""
     models = {}
     
-    align_values = ['0p25', '0p5', '1p0', '2p0', '4p0']
-    vr_values = ['0p25', '0p5', '0p75']
-    tau_values = ['0p07', '0p1', '0p13']
+    # Convert domain to lowercase to match training script naming
+    domain_lower = domain.lower()
     
+    # Alignment weight variants
+    align_values = ['0p25', '0p5', '1p0', '2p0', '4p0']
+    for align in align_values:
+        model_path = f'./models/navi_{domain_lower}_align{align}/epoch_2'
+        if os.path.exists(model_path):
+            model_name = f'navi_{domain_lower}_align{align}'
+            models[model_name] = NaviForMaskedLM(model_path)
+            models[model_name] = models[model_name].to(device)
+            models[model_name].eval()
+        else:
+            print(f"⚠️  Model not found: {model_path}")
+    
+    # HV weight & Value ratio variants
+    hv_vr_combinations = [
+        ('0p8', '0p25'), ('0p8', '0p75'), 
+        ('0p4', '0p25'), ('0p4', '0p5'), ('0p4', '0p75')
+    ]
+    for hv, vr in hv_vr_combinations:
+        model_path = f'./models/navi_{domain_lower}_hv{hv}_vr{vr}/epoch_2'
+        if os.path.exists(model_path):
+            model_name = f'navi_{domain_lower}_hv{hv}_vr{vr}'
+            models[model_name] = NaviForMaskedLM(model_path)
+            models[model_name] = models[model_name].to(device)
+            models[model_name].eval()
+        else:
+            print(f"⚠️  Model not found: {model_path}")
+    
+    # Tau variants
+    tau_values = ['0p07', '0p1']
     for tau in tau_values:
-        for align in align_values:
-            for vr in vr_values:
-                model_path = f'./models/full_Quarter_{domain}_HVB_hv{hv_value}_align{align}_vr{vr}_tau{tau}/epoch_2'
-                if os.path.exists(model_path):
-                    model_name = f'navi_{domain.lower()}_hv{hv_value}_align{align}_vr{vr}'
-                    models[model_name] = NaviForMaskedLM(model_path)
-                    models[model_name] = models[model_name].to(device)
-                    models[model_name].eval()
-                else:
-                    print(f"⚠️  Model not found: {model_path}")
+        model_path = f'./models/navi_{domain_lower}_tau{tau}/epoch_2'
+        if os.path.exists(model_path):
+            model_name = f'navi_{domain_lower}_tau{tau}'
+            models[model_name] = NaviForMaskedLM(model_path)
+            models[model_name] = models[model_name].to(device)
+            models[model_name].eval()
+        else:
+            print(f"⚠️  Model not found: {model_path}")
     
     return models
 
@@ -193,7 +213,7 @@ def run_model_clustering(dataset, target_col, model, model_name, domain, embeddi
     return results
 
 def evaluate_baselines(data, target_col, models, domain, embedding_type="cls"):
-    """Evaluate baseline models (BERT, HAETAE, TAPAS, ATLAS)"""
+    """Evaluate baseline models (BERT, HAETAE, TAPAS, NAVI)"""
     print(f"\n{domain} - Baselines")
     results = {}
     

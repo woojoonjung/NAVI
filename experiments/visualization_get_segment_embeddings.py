@@ -52,9 +52,9 @@ config = BertConfig.from_pretrained('bert-base-uncased')
 tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
 
 
-def extract_segment_embeddings_from_atlas(row_json, model, device):
+def extract_segment_embeddings_from_navi(row_json, model, device):
     """
-    Extract segment embeddings for an Atlas model for a single row.
+    Extract segment embeddings for a NAVI model for a single row.
     
     Args:
         row_json: Dictionary containing the row data
@@ -294,7 +294,7 @@ def extract_segments_with_entropy(sampled_data, model_path, field_categories, de
                 processed_row = remove_target_column(row, 'genres')
                 
                 # Extract segment embeddings
-                segment_embeddings = extract_segment_embeddings_from_atlas(processed_row, model, device)
+                segment_embeddings = extract_segment_embeddings_from_navi(processed_row, model, device)
                 
                 # Get primary genre
                 genres = row.get('genres', 'other')

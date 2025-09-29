@@ -1,0 +1,53 @@
+name: navi
+channels:
+  - conda-forge
+  - pytorch
+  - defaults
+dependencies:
+  - python=3.11.11
+  - pip=25.1
+  - cudatoolkit=11.8.0
+  - numpy=1.26.4
+  - scipy=1.15.2
+  - matplotlib=3.10.1
+  - seaborn=0.13.2
+  - networkx=3.4.2
+  - umap-learn=0.5.9
+  - nltk=3.9.1
+  - spacy=3.5.2
+  - pyarrow=20.0.0
+  - pandas=2.2.3
+  - tqdm=4.67.1
+  - faiss-gpu=1.9.0
+  - pip:
+    # Core ML/AI packages
+    - torch==2.7.0
+    - torchvision==0.22.0
+    - torchaudio==2.7.0
+    - transformers==4.51.3
+    - sentence-transformers==2.2.2
+    - datasets==3.5.1
+    - accelerate==1.6.0
+    - huggingface-hub==0.30.2
+    - safetensors==0.5.3
+    - tokenizers==0.21.1
+    - faiss-gpu==1.9.0
+    # Data processing
+    - unidecode==1.4.0
+    - jaro-winkler==2.0.3
+    - python-dotenv==1.1.1
+    - scikit-learn==1.6.1
+    - scikit-image==0.25.2
+    - pillow==11.2.1
+    - imageio==2.37.0
+    # Visualization
+    - bokeh==3.8.0
+    - holoviews==1.21.0
+    - panel==1.8.1
+    - datashader==0.18.2
+    - xarray==2025.9.0
+    - dask==2025.9.1
+    # Utilities
+    - protobuf==6.30.2
+    - grpcio==1.71.0
+    - requests==2.32.3

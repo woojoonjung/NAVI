@@ -11,15 +11,15 @@ config = Config()
 
 # -----------------------------
 # Navi Model
-# Ablation for "woSI" processed here
+# Ablation for "woSSI" processed here
 # -----------------------------
 
-class UniversalHeaderEncoder(nn.Module):
+class GlobalHeaderEncoder(nn.Module):
     """
     Encoder for generating  universal header embeddings.
     """
     def __init__(self, hidden_size=config.HIDDEN_SIZE, bert_name=config.BERT_NAME):
-        super(UniversalHeaderEncoder, self).__init__()
+        super(GlobalHeaderEncoder, self).__init__()
         self.bert = BertModel.from_pretrained(bert_name)
         self.tokenizer = BertTokenizer.from_pretrained(bert_name)
 
@@ -120,7 +120,7 @@ class NaviEmbeddings(nn.Module):
         self.LayerNorm = embeddings.LayerNorm
         self.dropout = embeddings.dropout
         self.ablation_mode = ablation_mode
-        self.header_encoder = UniversalHeaderEncoder()
+        self.header_encoder = GlobalHeaderEncoder()
 
     def forward(self, input_ids, position_ids=None, header_strings=None, segment_ids=None):
         """
@@ -171,7 +171,7 @@ class NaviEmbeddings(nn.Module):
         else:
             header_embeddings = torch.zeros_like(input_embeddings)
 
-        if self.ablation_mode == "woSI":
+        if self.ablation_mode == "woSSI":
             embeddings = input_embeddings + position_embeddings
         else:
             embeddings = input_embeddings + position_embeddings + header_embeddings
@@ -204,7 +204,7 @@ class NaviForMaskedLM(BertForMaskedLM):
     Navi Model - Header-Anchored pretraining for in-domain Tables Embedding
     Supports ablation via ablation_mode: 
     - "full": Complete model with all components
-    - "woSI": w/o schema induction
+    - "woSSI": w/o schema induction
     """
     def __init__(self, model_path=None, hidden_size=config.HIDDEN_SIZE, bert_name=config.BERT_NAME, ablation_mode="full"):
         super().__init__(BertForMaskedLM.from_pretrained(bert_name).config)

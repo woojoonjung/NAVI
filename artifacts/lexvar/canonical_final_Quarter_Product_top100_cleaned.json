@@ -1,0 +1,149 @@
+{
+  "row_level": {
+    "row_ids": ["row_id"],
+    "page_urls": ["page_url"]
+  },
+  "core_text": {
+    "name": ["name", "name.0", "name.1", "name.2"],
+    "descriptions": ["description", "description.0", "description.1", "description.2"]
+  },
+  "classification_and_attributes": {
+    "category": ["category", "category.0", "category.1", "category.2", "category.name", "offers.category", "offers.cat", "url.category"],
+    "brand_refs": ["brand", "brand.name", "offers.brand"],
+    "model": ["model"],
+    "color": ["color", "color.0", "color.1", "color.2"],
+    "size": ["size", "size.0", "size.1", "size.2"],
+    "weight": ["weight", "weight.value"],
+    "position": ["position"],
+    "audience": ["audience", "audience.suggestedgender"],
+    "book_media_specific": ["bookformat", "bookformat.0", "bookformat.1", "isbn", "numberofpages"],
+    "software_platform": [
+      "operatingsystem", "operatingsystem.0", "operatingsystem.1", "operatingsystem.2",
+      "url.operatingsystem", "url.operatingsystem.0", "url.operatingsystem.1",
+      "softwareversion",
+      "gameplatform", "gameplatform.0", "gameplatform.1",
+      "url.gameplatform", "url.gameplatform.0"
+    ],
+    "other_properties": ["pricerange"]
+  },
+  "identifiers": {
+    "product_ids": ["productid", "url.productid"],
+    "sku": ["sku", "sku.0", "sku.1", "sku.2", "offers.sku", "offers.0.sku", "url.sku"],
+    "mpn": [
+      "mpn", "mpn.0", "mpn.1", "mpn.2",
+      "offers.mpn", "offers.mpn.0", "offers.mpn.1", "offers.mpn.2", "offers.0.mpn",
+      "url.mpn"
+    ],
+    "gtin": [
+      "gtin", "gtin12", "gtin13", "gtin13.0", "gtin13.1", "gtin13.2",
+      "offers.gtin", "offers.gtin8", "offers.gtin12", "offers.gtin13", "offers.0.gtin", "offers.0.gtin12", "offers.0.gtin13",
+      "url.gtin13"
+    ]
+  },
+  "offers_and_pricing": {
+    "offer_block": ["offers", "offers.name", "offers.0.name", "offers.url", "offers.publisher", "offers.seller"],
+    "price_values": [
+      "price",
+      "offers.price", "offers.price.0", "offers.price.1", "offers.price.2", "offers.1.price", "offers.0.price",
+      "offers.minprice", "offers.maxprice",
+      "offers.lowprice", "offers.highprice",
+      "offers.listprice",
+      "isrelatedto.price"
+    ],
+    "price_currency": [
+      "pricecurrency",
+      "offers.pricecurrency", "offers.0.pricecurrency",
+      "isrelatedto.pricecurrency",
+      "isrelatedto.0.pricecurrency", "isrelatedto.1.pricecurrency"
+    ],
+    "price_validity": ["offers.pricevaliduntil", "offers.0.pricevaliduntil", "offers.validfrom", "offers.validthrough"],
+    "quantities": ["offers.quantity", "offers.eligiblequantity"],
+    "offer_counts_and_inventory": ["offers.offercount", "offers.inventorylevel", "offers.0.inventorylevel"],
+    "item_and_condition": ["offers.itemoffered", "itemcondition", "offers.itemcondition", "offers.0.itemcondition", "offers.category"],
+    "logistics_and_policy": [
+      "offers.availabledeliverymethod",
+      "offers.acceptedpaymentmethod", "offers.acceptedpaymentmethod.0", "offers.acceptedpaymentmethod.1", "offers.acceptedpaymentmethod.2", "offers.0.acceptedpaymentmethod.0",
+      "offers.valueaddedtaxincluded",
+      "offers.businessfunction",
+      "offers.checkoutpageurltemplate", "offers.0.checkoutpageurltemplate"
+    ],
+    "serials_and_tags": ["offers.serialnumber", "offers.tags"],
+    "related_offers_block": ["isrelatedto", "isrelatedto.0.price", "isrelatedto.1.price"]
+  },
+  "availability": {
+    "availability_flags": [
+      "offers.availability", "offers.availability.0", "offers.availability.1", "offers.0.availability",
+      "offers.availabilitystarts", "offers.availabilityends"
+    ]
+  },
+  "brand_and_manufacturer": {
+    "brand_metadata": [
+      "brand.description", "brand.logo", "brand.url", "brand.telephone",
+      "brand.slogan", "brand.pricerange",
+      "brand.sameas.0", "brand.sameas.1", "brand.sameas.2"
+    ],
+    "manufacturer": ["manufacturer", "manufacturer.name", "manufacturer.telephone"],
+    "producer": ["producer", "url.producer"]
+  },
+  "publisher_and_author": {
+    "publisher": ["publisher", "url.publisher"],
+    "author": ["author", "author.name", "author.0.name", "author.1.name", "author.2.name"]
+  },
+  "urls": {
+    "base": ["url", "url.0", "url.1"],
+    "named": ["url.name", "url.name.0", "url.name.1"],
+    "descriptions": ["url.description"],
+    "dates": ["url.datepublished", "url.datemodified"],
+    "language": ["url.inlanguage"]
+  },
+  "dates": {
+    "release_and_production": ["releasedate", "productiondate"],
+    "content_dates": ["datepublished", "datemodified"]
+  },
+  "media_and_images": {
+    "image_block": ["image", "image.name"],
+    "image_dims": ["image.width", "image.height"],
+    "image_caption": ["image.caption"],
+    "image_lang": ["image.inlanguage"],
+    "image_assets": ["image.0.contenturl", "image.1.contenturl", "image.2.contenturl"],
+    "review_media": ["review.thumbnailurl"]
+  },
+  "ratings_and_reviews": {
+    "aggregate_block": ["aggregaterating"],
+    "aggregate_values": [
+      "aggregaterating.ratingvalue", "aggregaterating.0.ratingvalue", "aggregaterating.1.ratingvalue",
+      "aggregaterating.ratingcount", "aggregaterating.reviewcount", "aggregaterating.0.reviewcount",
+      "aggregaterating.worstrating", "aggregaterating.bestrating"
+    ],
+    "aggregate_text": ["aggregaterating.description"],
+    "review_blocks": ["review", "reviews"],
+    "review_names": ["review.name", "review.0.name", "review.1.name", "review.2.name", "reviews.0.name", "reviews.1.name"],
+    "review_texts": [
+      "review.reviewbody", "review.0.reviewbody", "review.1.reviewbody",
+      "reviews.0.reviewbody", "reviews.1.reviewbody"
+    ],
+    "review_meta": ["review.headline", "review.description", "review.0.description", "review.1.description", "review.2.description"],
+    "review_authors": ["review.author"],
+    "review_dates": ["review.datepublished", "review.0.datepublished", "review.1.datepublished", "review.2.datepublished"],
+    "counters": ["reviewcount"]
+  },
+  "interaction": {
+    "interaction_block": ["interactionstatistic"],
+    "interaction_fields": ["interactionstatistic.interactiontype", "interactionstatistic.userinteractioncount"]
+  },
+  "geo_and_address": {
+    "address": ["address.streetaddress", "address.addresslocality", "address.addressregion", "address.addresscountry", "address.postalcode"],
+    "place_refs": ["containedinplace.name"]
+  },
+  "real_estate_specific": {
+    "floor_size": ["floorsize.value", "floorsize.unitcode"],
+    "rooms": ["numberofbedrooms", "numberoffullbathrooms"]
+  },
+  "language": {
+    "inlanguage": ["inlanguage", "url.inlanguage", "image.inlanguage"]
+  },
+  "misc": {
+    "offers_description_variants": ["offers.description", "offers.description.0", "offers.description.1", "offers.description.2", "offers.0.description"],
+    "links_misc": ["offers.url"]
+  }
+}

@@ -99,7 +99,7 @@ def parse_args():
                        choices=['HV', 'B', 'HVB'],
                        help="Masking strategy to use")
     parser.add_argument("--ablation_type", type=str, required=True,
-                       choices=['full', 'woED', 'woSI', "woSMLM"],
+                       choices=['full', 'woESA', 'woSSI', "woMSM"],
                        help="Ablation type to use")
     parser.add_argument("--batch_size", type=int, default=32, help="Batch size")
     parser.add_argument("--gradient_accumulation_steps", type=int, default=2, help="Number of gradient accumulation steps")
@@ -117,8 +117,8 @@ def parse_args():
     return parser.parse_args()
 
 def get_stage_config(masking_strategy, ablation_type):
-    # For woSMLM ablation, force BERT-style masking regardless of input strategy
-    if ablation_type == 'woSMLM':
+    # For woMSM ablation, force BERT-style masking regardless of input strategy
+    if ablation_type == 'woMSM':
         return [('B', 2)]
     if masking_strategy == 'HV':
         return [('HV', 2)]
@@ -263,14 +263,11 @@ def train_atlas(
             })
 
             # Losses
-            if ablation_type != "woMLM":
-                mlm_loss = loss_fns["mlm_loss"](mlm_logits, labels)
-            else:
-                mlm_loss = None
+            mlm_loss = loss_fns["mlm_loss"](mlm_logits, labels)
 
             entropy_contrast_loss = None
 
-            if ablation_type != "woED":
+            if ablation_type != "woESA":
                 table_ids = batch.get("table_ids")
                 header_strings = batch.get("header_strings")
 
@@ -330,9 +327,8 @@ def train_atlas(
     avg_entropy_contrast_loss = dist_loss_total / num_batches
     print(f"\n[Epoch {epoch+1}]")
     print(f"📉 Total Loss: {avg_total_loss:.4f}")
-    if ablation_type != "woMLM":
-        print(f"🔠 MLM Loss: {avg_mlm_loss:.4f}")
-    if ablation_type != "woED":
+    print(f"🔠 MLM Loss: {avg_mlm_loss:.4f}")
+    if ablation_type != "woESA":
         print(f"🧬 Entropy Contrastive Loss: {avg_entropy_contrast_loss:.4f}")
     return global_step
 
@@ -370,10 +366,10 @@ def main(args):
     masking_strategy = args.masking_strategy
     ablation_type = args.ablation_type
 
-    # For woSMLM ablation, override masking strategy to B
-    if ablation_type == 'woSMLM':
+    # For woMSM ablation, override masking strategy to B
+    if ablation_type == 'woMSM':
         masking_strategy = 'B'
-        print(f"woSMLM ablation: Forcing masking strategy to 'B' (BERT-style)")
+        print(f"woMSM ablation: Forcing masking strategy to 'B' (BERT-style)")
 
     stage_config = get_stage_config(masking_strategy, ablation_type)
     total_epochs = args.num_epochs

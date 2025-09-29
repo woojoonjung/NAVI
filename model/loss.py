@@ -13,18 +13,14 @@ def get_loss_weights(masking_strategy, ablation_type="full", alignment_weight=0.
     # [mlm, alignment]
     if masking_strategy == 'B':
         weigths = [1, alignment_weight]
-        if ablation_type == "woMLM":
-            weigths[0] = 0
-        if ablation_type == "woED":
+        if ablation_type == "woESA":
             weigths[1] = 0
 
         return weigths
     else:
         weigths = [1, alignment_weight]
         # Apply ablation masks
-        if ablation_type == "woMLM":
-            weigths[0] = 0
-        if ablation_type == "woED":
+        if ablation_type == "woESA":
             weigths[1] = 0 
 
         return weigths
