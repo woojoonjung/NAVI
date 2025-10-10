@@ -236,21 +236,23 @@ def extract_heldout_data(input_directory: str, domain: str, start_row_id: int = 
     
     # Set file pattern based on domain
     if domain == 'movie':
-        file_pattern = "Product_*.jsonl"
+        file_pattern = "Movie_*"
     elif domain == 'product':
-        file_pattern = "Product_*.jsonl"
+        file_pattern = "Product_*"
     else:
         raise ValueError(f"Unsupported domain: {domain}. Must be 'movie' or 'product'")
     
-    # Get all JSONL files in the directory
-    jsonl_files = glob.glob(os.path.join(input_directory, file_pattern))
+    # Get all JSON/JSONL files in the directory
+    json_files = glob.glob(os.path.join(input_directory, file_pattern + ".json"))
+    jsonl_files = glob.glob(os.path.join(input_directory, file_pattern + ".jsonl"))
+    all_files = json_files + jsonl_files
     
-    print(f"  Found {len(jsonl_files)} {domain} JSONL files")
+    print(f"  Found {len(all_files)} {domain} files")
     print(f"  Extracting rows with row_id {start_row_id} to {end_row_id}")
     
     extracted_rows = []
     
-    for file_path in sorted(jsonl_files):
+    for file_path in sorted(all_files):
         filename = os.path.basename(file_path)
         
         try:
@@ -634,18 +636,18 @@ def clean_table_data(json_data, tokenizer_name="bert-base-uncased",
     print("🔄 Cleaning table data with language and BERT vocabulary validation...")
     
     for table_id, table_dict in json_data:
-        # Skip non-English rows if enabled
+        # Skip non-English tables if enabled
         if skip_non_english and not is_english_table(table_dict, english_ratio_threshold, min_text_fields):
             skipped_non_english += 1
             if skipped_non_english % 100 == 0:
-                print(f"   Skipped {skipped_non_english} non-English rows...")
+                print(f"   Skipped {skipped_non_english} non-English tables...")
             continue
         
-        # Skip rows that can't be properly tokenized by BERT
+        # Skip tables that can't be properly tokenized by BERT
         if skip_non_bert and not is_bert_compatible_table(table_dict, tokenizer, unk_threshold, min_text_fields):
             skipped_non_bert += 1
             if skipped_non_bert % 100 == 0:
-                print(f"   Skipped {skipped_non_bert} non-BERT-compatible rows...")
+                print(f"   Skipped {skipped_non_bert} non-BERT-compatible tables...")
             continue
         
         # Handle indexed fields
