@@ -62,9 +62,6 @@ Our unified preprocessing pipeline follows a 5-step workflow to prepare the data
 
 #### Step 4: Remove Heldout Rows from Training Data
 
-#### Step 5: Clean Training Datasets
-- *Output*: Cleaned Movie_top100 and Product_top100 files
-
 ```bash
 # Run with default settings
 python dataset/preprocess.py
