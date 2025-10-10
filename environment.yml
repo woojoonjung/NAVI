@@ -31,7 +31,6 @@ dependencies:
     - huggingface-hub==0.30.2
     - safetensors==0.5.3
     - tokenizers==0.21.1
-    - faiss-gpu==1.9.0
     # Data processing
     - unidecode==1.4.0
     - jaro-winkler==2.0.3
