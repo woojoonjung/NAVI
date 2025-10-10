@@ -634,18 +634,18 @@ def clean_table_data(json_data, tokenizer_name="bert-base-uncased",
     print("🔄 Cleaning table data with language and BERT vocabulary validation...")
     
     for table_id, table_dict in json_data:
-        # Skip non-English tables if enabled
+        # Skip non-English rows if enabled
         if skip_non_english and not is_english_table(table_dict, english_ratio_threshold, min_text_fields):
             skipped_non_english += 1
             if skipped_non_english % 100 == 0:
-                print(f"   Skipped {skipped_non_english} non-English tables...")
+                print(f"   Skipped {skipped_non_english} non-English rows...")
             continue
         
-        # Skip tables that can't be properly tokenized by BERT
+        # Skip rows that can't be properly tokenized by BERT
         if skip_non_bert and not is_bert_compatible_table(table_dict, tokenizer, unk_threshold, min_text_fields):
             skipped_non_bert += 1
             if skipped_non_bert % 100 == 0:
-                print(f"   Skipped {skipped_non_bert} non-BERT-compatible tables...")
+                print(f"   Skipped {skipped_non_bert} non-BERT-compatible rows...")
             continue
         
         # Handle indexed fields
