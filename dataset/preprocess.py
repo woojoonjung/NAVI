@@ -810,9 +810,6 @@ def main():
     # Step 4: Remove heldout rows from training datasets
     remove_heldout_rows_from_datasets(args.movie_dir, args.product_dir, args.heldout_end)
     
-    # Step 5: Clean training datasets
-    clean_training_datasets(args.movie_dir, args.product_dir)
-    
     print("\n" + "="*80)
     print("🎉 PREPROCESSING PIPELINE COMPLETE!")
     print("="*80)
