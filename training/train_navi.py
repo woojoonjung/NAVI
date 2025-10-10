@@ -60,13 +60,13 @@ def create_combined_dataset(jsonl_files, tokenizer_name, max_length, ablation_mo
     if not all_data:
         raise ValueError("No valid data found from any files")
 
-    all_data = clean_table_data(
-        all_data,
-        tokenizer_name=tokenizer_name,
-        max_tokens=500,
-        max_indexed_fields=3,
-        max_tokens_per_field=20
-    )
+    # all_data = clean_table_data(
+    #     all_data,
+    #     tokenizer_name=tokenizer_name,
+    #     max_tokens=500,
+    #     max_indexed_fields=3,
+    #     max_tokens_per_field=20
+    # )
     
     print(f"🔄 Total combined data: {len(all_data)} rows")
     
