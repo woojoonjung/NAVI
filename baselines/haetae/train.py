@@ -386,7 +386,7 @@ def main(args):
     jsonl_files = sorted([
         os.path.join(args.data_path, f)
         for f in os.listdir(args.data_path)
-        if f.endswith(".jsonl")
+        if f.endswith(".json")
     ])
 
     # Sort files by number of lines (rows) as per flowchart
