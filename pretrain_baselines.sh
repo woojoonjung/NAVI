@@ -19,7 +19,7 @@ mkdir -p models
 # Function to train BERT model
 train_bert() {
     local dataset=$1
-    local data_path="./data/${dataset}_top100_cleaned"
+    local data_path="./data/${dataset}_top100"
     local output_dir="./models/bert_${dataset,,}"
     local log_file="bert_${dataset,,}.log"
     
@@ -41,7 +41,7 @@ train_bert() {
 # Function to train HAETAE model
 train_haetae() {
     local dataset=$1
-    local data_path="./data/${dataset}_top100_cleaned"
+    local data_path="./data/${dataset}_top100"
     local output_dir="./models/haetae_${dataset,,}"
     local log_file="haetae_${dataset,,}.log"
     
@@ -63,7 +63,7 @@ train_haetae() {
 # Function to train TAPAS model
 train_tapas() {
     local dataset=$1
-    local data_path="./data/${dataset}_top100_cleaned"
+    local data_path="./data/${dataset}_top100"
     local output_dir="./models/tapas_${dataset,,}"
     local log_file="tapas_${dataset,,}.log"
     
