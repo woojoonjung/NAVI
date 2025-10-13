@@ -67,7 +67,7 @@ def create_combined_dataset(jsonl_files, max_length, cache_dir=".cache_tokenized
 
 def load_or_tokenize(jsonl_file, max_length, cache_dir=".cache_tokenized"):
     os.makedirs(cache_dir, exist_ok=True)
-    cache_file = os.path.join(cache_dir, os.path.basename(jsonl_file).replace(".jsonl", ".pkl"))
+    cache_file = os.path.join(cache_dir, os.path.basename(jsonl_file).replace(".json", ".pkl"))
 
     if os.path.exists(cache_file):
         try:
@@ -211,7 +211,7 @@ def main(args):
     jsonl_files = sorted([
         os.path.join(args.data_path, f)
         for f in os.listdir(args.data_path)
-        if f.endswith(".jsonl")
+        if f.endswith(".json")
     ])
 
     # Sort files by number of lines (rows) as per flowchart
