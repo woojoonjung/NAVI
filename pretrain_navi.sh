@@ -57,7 +57,7 @@ train_navi_model() {
     local model_name=$7
     local log_suffix=$8
     
-    local data_path="./data/${dataset}_top100_cleaned"
+    local data_path="./data/${dataset}_top100"
     local output_dir="./models/${model_name}"
     local log_file="navi_${dataset,,}_${log_suffix}.log"
     
