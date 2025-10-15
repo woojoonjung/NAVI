@@ -66,6 +66,14 @@ def load_baseline_models(tokenizer):
     models['tapas_product'] = TapasForMaskedLM.from_pretrained('./models/tapas_product/epoch_2', local_files_only=True)
     models['tapas_product'] = models['tapas_product'].to(device)
     models['tapas_product'].eval()
+
+    models['navi_movie'] = NaviForMaskedLM('./models/navi_movie/epoch_2')
+    models['navi_movie'] = models['navi_movie'].to(device)
+    models['navi_movie'].eval()
+    
+    models['navi_product'] = NaviForMaskedLM('./models/navi_product/epoch_2')
+    models['navi_product'] = models['navi_product'].to(device)
+    models['navi_product'].eval()
     
     return models
 
@@ -179,7 +187,7 @@ def group_data_by_table(data):
     print(f"Grouped {len(data)} rows into {len(grouped_tables)} tables")
     return grouped_tables
 
-def evaluate_baselines(bert_dataset, haetae_dataset, tapas_dataset, models, tokenizers, collators, domain):
+def evaluate_baselines(bert_dataset, haetae_dataset, tapas_dataset, navi_dataset, models, tokenizers, collators, domain):
     """Evaluate baseline models (BERT, HAETAE, TAPAS)"""
     print(f"\n{domain} - Baselines")
     
@@ -206,6 +214,14 @@ def evaluate_baselines(bert_dataset, haetae_dataset, tapas_dataset, models, toke
     evaluate_masked_prediction(haetae_dataset, models[haetae_key], tokenizers[0], collators[0], epoch=1)
     print("Value:")
     evaluate_masked_prediction(haetae_dataset, models[haetae_key], tokenizers[0], collators[0], epoch=5)
+    
+    # NAVI
+    print("\nNAVI")
+    navi_key = f'navi_{domain.lower()}'
+    print("Header:")
+    evaluate_masked_prediction(navi_dataset, models[navi_key], tokenizers[0], collators[0], epoch=1)
+    print("Value:")
+    evaluate_masked_prediction(navi_dataset, models[navi_key], tokenizers[0], collators[0], epoch=5)
 
 def evaluate_ablations(dataset, models, tokenizer, collator, domain):
     """Evaluate ablation models"""
@@ -335,7 +351,7 @@ def main():
     # Load models based on type
     if args.model == 'baselines':
         models = load_baseline_models(tokenizers[0])
-        evaluate_baselines(bert_dataset, haetae_dataset, tapas_dataset, models, tokenizers, collators, args.domain)
+        evaluate_baselines(bert_dataset, haetae_dataset, tapas_dataset, navi_dataset, models, tokenizers, collators, args.domain)
         
     elif args.model == 'ablations':
         models = load_ablation_models(tokenizers[0])
