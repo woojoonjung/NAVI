@@ -11,8 +11,7 @@ from experiments.experiment_utils import (
     load_data, 
     run_row_classification,
     get_cls_embedding,
-    get_meanpooled_embedding,
-    get_meanpooled_segment_embedding
+    get_meanpooled_embedding
 )
 
 # Model imports
@@ -390,6 +389,14 @@ def load_baseline_models(tokenizer):
     models['tapas_product'] = TapasForMaskedLM.from_pretrained('./models/tapas_product/epoch_2', local_files_only=True)
     models['tapas_product'] = models['tapas_product'].to(device)
     models['tapas_product'].eval()
+
+    models['navi_movie'] = NaviForMaskedLM('./models/navi_movie/epoch_2')
+    models['navi_movie'] = models['navi_movie'].to(device)
+    models['navi_movie'].eval()
+    
+    models['navi_product'] = NaviForMaskedLM('./models/navi_product/epoch_2')
+    models['navi_product'] = models['navi_product'].to(device)
+    models['navi_product'].eval()
     
     return models
 
@@ -515,6 +522,17 @@ def evaluate_baselines(data, target_col, models, domain, n_runs=5, embedding_typ
             ml_model=ml_model, n_runs=n_runs, embedding_type=embedding_type
         )
         results['haetae'][f"{ml_model}_{domain}"] = result
+
+    # NAVI
+    print("\nNAVI")
+    navi_key = f'navi_{domain.lower()}'
+    results['navi'] = {}
+    for ml_model in ml_models:
+        result = run_repeated_classification(
+            data, target_col, models[navi_key], 'navi', domain, 
+            ml_model=ml_model, n_runs=n_runs, embedding_type=embedding_type
+        )
+        results['navi'][f"{ml_model}_{domain}"] = result
     
     return results
 
