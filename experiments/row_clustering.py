@@ -17,8 +17,7 @@ from experiments.experiment_utils import (
     load_data, 
     run_row_clustering,
     get_cls_embedding,
-    get_meanpooled_embedding,
-    get_meanpooled_segment_embedding
+    get_meanpooled_embedding
 )
 from row_classification import (
     clean_table_data_preserve_targets,
@@ -314,7 +313,7 @@ def main():
     
     # Load datasets
     wdc_product_data = load_data("data/WDC_product_for_cls.jsonl")
-    wdc_movie_data = load_data("data/wd_WDC_movie_for_cls.jsonl")
+    wdc_movie_data = load_data("data/WDC_movie_for_cls.jsonl")
     
     grouped_wdc_product_data = group_data_by_table(wdc_product_data)
     grouped_wdc_movie_data = group_data_by_table(wdc_movie_data)
