@@ -287,15 +287,16 @@ def create_heldout_datasets(movie_dir: str, product_dir: str) -> None:
     
     # Create Movie heldout datasets
     print("Creating Movie heldout datasets...")
-    movie_heldout_data = extract_heldout_data(movie_dir, 'movie', 450, 459)
     
-    # Save Movie MP dataset (raw flattened data)
+    # MP dataset: rows 450-459 (10 rows per table for masked prediction)
+    movie_mp_data = extract_heldout_data(movie_dir, 'movie', 450, 459)
     movie_mp_output = "data/WDC_movie_for_mp.jsonl"
-    save_jsonl(movie_heldout_data, movie_mp_output)
-    print(f"  ✅ Movie MP dataset saved: {len(movie_heldout_data)} rows")
+    save_jsonl(movie_mp_data, movie_mp_output)
+    print(f"  ✅ Movie MP dataset saved: {len(movie_mp_data)} rows")
     
-    # Create Movie CLS dataset (with genre unification)
-    movie_cls_data = [unify_genre_keys(row) for row in movie_heldout_data]
+    # CLS dataset: rows 0-449 (450 rows per table for classification)
+    movie_cls_data = extract_heldout_data(movie_dir, 'movie', 0, 449)
+    movie_cls_data = [unify_genre_keys(row) for row in movie_cls_data]
     movie_cls_data = [row for row in movie_cls_data if "genres" in row.keys() and row["genres"] and row["genres"] != "None"]
     movie_cls_output = "data/WDC_movie_for_cls.jsonl"
     save_jsonl(movie_cls_data, movie_cls_output)
@@ -303,15 +304,16 @@ def create_heldout_datasets(movie_dir: str, product_dir: str) -> None:
     
     # Create Product heldout datasets
     print("\nCreating Product heldout datasets...")
-    product_heldout_data = extract_heldout_data(product_dir, 'product', 450, 459)
     
-    # Save Product MP dataset (raw flattened data)
+    # MP dataset: rows 450-459 (10 rows per table for masked prediction)
+    product_mp_data = extract_heldout_data(product_dir, 'product', 450, 459)
     product_mp_output = "data/WDC_product_for_mp.jsonl"
-    save_jsonl(product_heldout_data, product_mp_output)
-    print(f"  ✅ Product MP dataset saved: {len(product_heldout_data)} rows")
+    save_jsonl(product_mp_data, product_mp_output)
+    print(f"  ✅ Product MP dataset saved: {len(product_mp_data)} rows")
     
-    # Create Product CLS dataset (with category unification)
-    product_cls_data = [unify_category_keys(row) for row in product_heldout_data]
+    # CLS dataset: rows 0-449 (450 rows per table for classification)
+    product_cls_data = extract_heldout_data(product_dir, 'product', 0, 449)
+    product_cls_data = [unify_category_keys(row) for row in product_cls_data]
     product_cls_data = [row for row in product_cls_data if "category" in row.keys() and row["category"] and row["category"] != "None"]
     product_cls_output = "data/WDC_product_for_cls.jsonl"
     save_jsonl(product_cls_data, product_cls_output)
@@ -809,6 +811,9 @@ def main():
     
     # Step 4: Remove heldout rows from training datasets
     remove_heldout_rows_from_datasets(args.movie_dir, args.product_dir, args.heldout_end)
+    
+    # Step 5: Clean training datasets
+    clean_training_datasets(args.movie_dir, args.product_dir)
     
     print("\n" + "="*80)
     print("🎉 PREPROCESSING PIPELINE COMPLETE!")
