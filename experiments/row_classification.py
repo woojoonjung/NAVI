@@ -483,7 +483,7 @@ def print_class_distribution(data, label_key, dataset_name):
         print(f"{label:<30} {count:>5}")
     print(f"Total samples: {sum(label_counts.values())}")
 
-def evaluate_baselines(data, target_col, models, domain, n_runs=5, embedding_type="cls"):
+def evaluate_baselines(data, target_col, models, domain, n_runs=8, embedding_type="cls"):
     """Evaluate baseline models (BERT, HAETAE, TAPAS)"""
     print(f"\n{domain} - Baselines")
     
