@@ -13,6 +13,7 @@ import random
 import os
 import argparse
 import gc
+import glob
 from datetime import datetime
 from collections import Counter
 from pathlib import Path
@@ -20,14 +21,6 @@ import pandas as pd
 
 # Utility imports from existing experiment scripts
 from experiments.experiment_utils import load_data
-from row_classification import (
-    clean_table_data_preserve_targets,
-    preprocess_wdc_movie,
-    stratified_sample,
-    remove_target_column,
-    print_class_distribution,
-    group_data_by_table
-)
 
 # Model imports
 from transformers import BertTokenizer, BertConfig
@@ -164,33 +157,69 @@ def extract_universal_header_embeddings(header_strings, model):
     return {header: emb.cpu().numpy() for header, emb in zip(header_strings, E_univ)}
 
 
-def sample_tables_and_rows(data, n_tables=6, rows_per_table=200, random_state=42):
+def load_tables_from_validation_dir(validation_dir, n_tables=6, rows_per_table=200, random_state=42):
     """
-    Sample n_tables with rows_per_table rows each from the data.
-    If not enough tables with sufficient rows, use all available data.
+    Load and sample tables from validation directory.
+    Each JSON file in the directory represents one table.
     
     Args:
-        data: List of (table_id, row) tuples
+        validation_dir: Path to validation directory containing JSON files
         n_tables: Number of tables to sample
         rows_per_table: Number of rows per table
         random_state: Random seed for reproducibility
         
     Returns:
-        dict: Mapping from table_id to list of sampled rows
+        dict: Mapping from table_id (filename stem) to list of sampled rows
     """
+    
     random.seed(random_state)
     np.random.seed(random_state)
     
-    # Group data by table_id
-    table_data = {}
-    for table_id, row in data:
-        if table_id not in table_data:
-            table_data[table_id] = []
-        table_data[table_id].append(row)
+    validation_path = Path(validation_dir)
+    if not validation_path.exists():
+        raise ValueError(f"Validation directory not found: {validation_dir}")
     
-    print(f"Available tables: {len(table_data)}")
-    for tid, rows in table_data.items():
-        print(f"  Table {tid}: {len(rows)} rows")
+    # Get all JSON files in the directory
+    json_files = sorted(list(validation_path.glob('*.json')))
+    
+    if not json_files:
+        raise ValueError(f"No JSON files found in {validation_dir}")
+    
+    print(f"Found {len(json_files)} tables in {validation_dir}")
+    
+    # Load all tables with their row counts
+    table_data = {}
+    for json_file in json_files:
+        table_id = json_file.stem  # Use filename without extension as table_id
+        rows = []
+        
+        if json_file.stat().st_size == 0:
+            print(f"  Skipping empty file: {table_id}")
+            continue
+        
+        try:
+            with open(json_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        row = json.loads(line)
+                        rows.append(row)
+                    except json.JSONDecodeError:
+                        continue
+            
+            if rows:
+                table_data[table_id] = rows
+                print(f"  Table {table_id}: {len(rows)} rows")
+        except Exception as e:
+            print(f"  Error loading {table_id}: {e}")
+            continue
+    
+    if not table_data:
+        raise ValueError(f"No valid tables found in {validation_dir}")
+    
+    print(f"Successfully loaded {len(table_data)} tables")
     
     # Filter tables with enough rows
     valid_tables = {tid: rows for tid, rows in table_data.items() if len(rows) >= rows_per_table}
@@ -201,7 +230,7 @@ def sample_tables_and_rows(data, n_tables=6, rows_per_table=200, random_state=42
             print("No tables have enough rows. Using all available data with reduced rows_per_table.")
             # Use all tables but reduce rows_per_table
             valid_tables = table_data
-            rows_per_table = min(rows_per_table, min(len(rows) for rows in table_data.values()))
+            rows_per_table = min(rows_per_table, min(len(rows) for rows in table_data.values()) if table_data else 0)
             print(f"Adjusted rows_per_table to {rows_per_table}")
         else:
             print("Using all available valid tables.")
@@ -220,7 +249,7 @@ def sample_tables_and_rows(data, n_tables=6, rows_per_table=200, random_state=42
         sampled_rows = random.sample(table_rows, sample_size)
         sampled_data[table_id] = sampled_rows
         total_rows += len(sampled_rows)
-        print(f"Table {table_id}: sampled {len(sampled_rows)} rows")
+        print(f"Selected table {table_id}: sampled {len(sampled_rows)} rows")
     
     print(f"Total sampled rows: {total_rows}")
     return sampled_data
@@ -229,6 +258,7 @@ def sample_tables_and_rows(data, n_tables=6, rows_per_table=200, random_state=42
 def compute_entropy_categorization(sampled_data):
     """
     Compute entropy categorization for each table using FieldEntropyAnalyzer.
+    Uses 10th and 90th percentiles for low/high entropy categorization.
     
     Args:
         sampled_data: Dict mapping table_id to list of rows
@@ -238,7 +268,7 @@ def compute_entropy_categorization(sampled_data):
     """
     print("Computing entropy categorization...")
     
-    # Create dataset with entropy analysis
+    # Create dataset with entropy analysis using percentile method (10th and 90th percentiles)
     all_rows = []
     table_mapping = {}
     
@@ -247,8 +277,14 @@ def compute_entropy_categorization(sampled_data):
             all_rows.append((table_id, row))
             table_mapping[len(all_rows) - 1] = table_id
     
-    # Create NaviDataset with entropy analysis
-    dataset = NaviDataset(all_rows, compute_field_entropy=True)
+    # Create NaviDataset with entropy analysis using 10th and 90th percentiles
+    dataset = NaviDataset(
+        all_rows, 
+        compute_field_entropy=True,
+        entropy_threshold_method="percentile",
+        low_threshold_percentile=10,
+        high_threshold_percentile=90
+    )
     
     # Get field categories
     field_categories = dataset.get_field_categories()
@@ -290,18 +326,11 @@ def extract_segments_with_entropy(sampled_data, model_path, field_categories, de
         
         for row_idx, row in enumerate(rows):
             try:
-                # Remove target column for processing
-                processed_row = remove_target_column(row, 'genres')
+                # Process row as-is (no target column removal needed)
+                processed_row = row.copy()
                 
                 # Extract segment embeddings
                 segment_embeddings = extract_segment_embeddings_from_navi(processed_row, model, device)
-                
-                # Get primary genre
-                genres = row.get('genres', 'other')
-                if isinstance(genres, str):
-                    primary_genre = genres.split(',')[0].strip().lower()
-                else:
-                    primary_genre = 'other'
                 
                 # Create segment data
                 for header, embedding in segment_embeddings.items():
@@ -322,7 +351,6 @@ def extract_segments_with_entropy(sampled_data, model_path, field_categories, de
                         'header': header,
                         'entropy': entropy_value,
                         'entropy_group': entropy_group,
-                        'primary_genre': primary_genre,
                         'segment_embedding': embedding
                     }
                     segments.append(segment_data)
@@ -368,8 +396,7 @@ def save_segments_data(segments, all_headers, output_path):
             'low': len([s for s in segments if s['entropy_group'] == 'low']),
             'mid': len([s for s in segments if s['entropy_group'] != 'low' and s['entropy_group'] != 'high']),
             'high': len([s for s in segments if s['entropy_group'] == 'high'])
-        },
-        'genres': list(set(s['primary_genre'] for s in segments))
+        }
     }
     
     with open(os.path.join(output_path, 'metadata.json'), 'w') as f:
@@ -378,68 +405,122 @@ def save_segments_data(segments, all_headers, output_path):
     print(f"Saved {len(segments)} segments to {output_path}")
 
 
+def find_epoch_path(base_path, epoch):
+    """Find epoch directory using glob pattern"""
+    pattern = os.path.join(base_path, f"*epoch_{epoch}")
+    matches = glob.glob(pattern)
+    if matches:
+        # Prefer the most specific match (longest path)
+        matches.sort(key=len, reverse=True)
+        return matches[0]
+    # Fallback to direct path
+    direct_path = os.path.join(base_path, f"epoch_{epoch}")
+    if os.path.exists(direct_path):
+        return direct_path
+    return None
+
+
 def main():
     parser = argparse.ArgumentParser(description='Extract segment embeddings from Navi model')
     parser.add_argument('--model_path', type=str, required=True,
-                       help='Path to Navi model')
+                       help='Path to Navi model (base directory or full path to epoch_2)')
+    parser.add_argument('--domain', type=str, default='cleaned/Movie',
+                       help='Domain path (e.g., cleaned/Movie or cleaned/Product)')
+    parser.add_argument('--data_dir', type=str, default='data',
+                       help='Base data directory')
     parser.add_argument('--output_path', type=str, required=True,
                        help='Output directory for segment data')
-    parser.add_argument('--n_tables', type=int, default=6,
+    parser.add_argument('--n_tables', type=int, default=5,
                        help='Number of tables to sample')
     parser.add_argument('--rows_per_table', type=int, default=100,
                        help='Number of rows per table')
-    parser.add_argument('--random_state', type=int, default=42,
+    parser.add_argument('--random_state', type=int, default=24,
                        help='Random seed for reproducibility')
+    parser.add_argument('--ablation_mode', action='store_true', default=False,
+                       help='Enable ablation mode for ablation model paths')
     
     args = parser.parse_args()
     
-    print(f"Extracting segment embeddings from {args.model_path}")
+    # Find the actual epoch_2 directory
+    # Handle both cases: base directory or full path to epoch_2
+    if os.path.isdir(args.model_path):
+        # Check if it's already an epoch_2 directory (ends with epoch_2 or contains it)
+        if args.model_path.endswith('epoch_2') or os.path.basename(args.model_path) == 'epoch_2':
+            # Verify it contains model.safetensors
+            if os.path.exists(os.path.join(args.model_path, 'model.safetensors')):
+                actual_model_path = args.model_path
+            else:
+                raise ValueError(f"Model path {args.model_path} appears to be epoch_2 but model.safetensors not found")
+        else:
+            # Try to find epoch_2 directory using glob pattern
+            epoch_path = find_epoch_path(args.model_path, epoch=2)
+            if epoch_path and os.path.exists(os.path.join(epoch_path, 'model.safetensors')):
+                actual_model_path = epoch_path
+                print(f"Found epoch_2 directory: {actual_model_path}")
+            else:
+                # Try direct epoch_2 subdirectory
+                direct_epoch_path = os.path.join(args.model_path, 'epoch_2')
+                if os.path.exists(direct_epoch_path) and os.path.exists(os.path.join(direct_epoch_path, 'model.safetensors')):
+                    actual_model_path = direct_epoch_path
+                else:
+                    raise ValueError(f"Could not find epoch_2 directory with model.safetensors in {args.model_path}")
+    elif os.path.isfile(args.model_path):
+        # If it's a file, use the parent directory
+        actual_model_path = os.path.dirname(args.model_path)
+    else:
+        raise ValueError(f"Model path not found: {args.model_path}")
+    
+    # Verify model files exist
+    model_file = os.path.join(actual_model_path, 'model.safetensors')
+    if not os.path.exists(model_file):
+        raise ValueError(f"Model file not found at {model_file}")
+    
+    print(f"Extracting segment embeddings from {actual_model_path}")
+    print(f"Domain: {args.domain}")
+    print(f"Ablation mode: {args.ablation_mode}")
     print(f"Sampling {args.n_tables} tables with {args.rows_per_table} rows each")
     
-    # Load and preprocess data (following row_clustering_genre.py)
-    print("Loading and preprocessing data...")
-    wdc_movie_data = load_data("data/wd_WDC_movie_for_cls.jsonl")
+    # Load tables from validation directory
+    from pathlib import Path
+    validation_dir = Path(args.data_dir) / args.domain / 'validation'
     
-    grouped_wdc_movie_data = group_data_by_table(wdc_movie_data)
+    if not validation_dir.exists():
+        raise ValueError(f"Validation directory not found: {validation_dir}")
     
-    wdc_movie_data = []
-    for idx, table in grouped_wdc_movie_data:
-        for row in table:
-            wdc_movie_data.append((idx, row))
-    
-    # Clean data while preserving target columns
-    print("Cleaning movie data...")
-    wdc_movie_data = clean_table_data_preserve_targets(wdc_movie_data, target_columns=['genres'])
-    
-    # Preprocess and filter data
-    wdc_movie_data = preprocess_wdc_movie(wdc_movie_data)
-    
-    # Use all available data instead of stratified sampling
-    print(f"WDC Movie data sample size: {len(wdc_movie_data)}")
-    print_class_distribution([row for _, row in wdc_movie_data], "genres", "WDC Movie")
-    
-    # Sample tables and rows
-    print("Sampling tables and rows...")
-    sampled_data = sample_tables_and_rows(
-        wdc_movie_data, 
-        n_tables=args.n_tables, 
-        rows_per_table=args.rows_per_table, 
+    print(f"Loading tables from {validation_dir}...")
+    sampled_data = load_tables_from_validation_dir(
+        validation_dir,
+        n_tables=args.n_tables,
+        rows_per_table=args.rows_per_table,
         random_state=args.random_state
     )
     
-    # Compute entropy categorization
+    # Compute entropy categorization (using 10th and 90th percentiles)
+    print("Computing entropy categorization...")
     field_categories = compute_entropy_categorization(sampled_data)
     
     # Extract segment embeddings
     segments, all_headers = extract_segments_with_entropy(
         sampled_data, 
-        args.model_path, 
+        actual_model_path, 
         field_categories, 
         device
     )
     
+    # Adjust output path for ablation mode
+    if args.ablation_mode:
+        # Create ablation subdirectory if needed
+        output_path = args.output_path
+        if 'ablation' not in output_path:
+            # Extract model name from path for better organization
+            base_output = os.path.dirname(output_path) if os.path.dirname(output_path) else output_path
+            output_name = os.path.basename(output_path)
+            output_path = os.path.join(base_output, 'ablation', output_name)
+    else:
+        output_path = args.output_path
+    
     # Save data
-    save_segments_data(segments, all_headers, args.output_path)
+    save_segments_data(segments, all_headers, output_path)
     
     print("✅ Segment extraction complete!")
 

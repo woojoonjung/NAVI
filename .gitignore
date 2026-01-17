@@ -58,6 +58,7 @@ data/
 *.hdf5
 
 # Model files
+models/
 *.bin
 *.safetensors
 *.pt
@@ -65,4 +66,18 @@ data/
 *.ckpt
 
 # Allow canonical sets files in artifacts/lexvar
-!artifacts/lexvar/canonical_final_*.json
+!artifacts/lexvar/canonical_sets_*.json
+!artifacts/schema_noise/synonym_map.json
+
+__pycache__/
+
+plots/
+emb/
+segment_visualization/
+logs/
+markdowns/
+index/
+runs/
+
+
+*.log

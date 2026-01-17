@@ -18,10 +18,11 @@ class GlobalHeaderEncoder(nn.Module):
     """
     Encoder for generating  universal header embeddings.
     """
-    def __init__(self, hidden_size=config.HIDDEN_SIZE, bert_name=config.BERT_NAME):
+    def __init__(self, hidden_size=config.HIDDEN_SIZE, bert_name=config.BERT_NAME, header_encoder_mode="full"):
         super(GlobalHeaderEncoder, self).__init__()
         self.bert = BertModel.from_pretrained(bert_name)
         self.tokenizer = BertTokenizer.from_pretrained(bert_name)
+        self.header_encoder_mode = header_encoder_mode
 
         # Embedding layer
         self.embeddings = copy.deepcopy(self.bert.embeddings)
@@ -29,6 +30,32 @@ class GlobalHeaderEncoder(nn.Module):
         # Encoding layers
         self.encoder_layer_1 = copy.deepcopy(self.bert.encoder.layer[7])  # Layer 8
         self.encoder_layer_2 = copy.deepcopy(self.bert.encoder.layer[8])   # Layer 9
+        
+        # Configure training mode
+        self._configure_training_mode()
+    
+    def _configure_training_mode(self):
+        """Configure which parameters are trainable based on header_encoder_mode."""
+        if self.header_encoder_mode == "frozen":
+            # Freeze all parameters
+            for param in self.embeddings.parameters():
+                param.requires_grad = False
+            for param in self.encoder_layer_1.parameters():
+                param.requires_grad = False
+            for param in self.encoder_layer_2.parameters():
+                param.requires_grad = False
+        elif self.header_encoder_mode == "partial":
+            # Freeze embeddings and layer_1, train only layer_2
+            for param in self.embeddings.parameters():
+                param.requires_grad = False
+            for param in self.encoder_layer_1.parameters():
+                param.requires_grad = False
+            # encoder_layer_2 remains trainable (default)
+        elif self.header_encoder_mode == "full":
+            # All parameters trainable (default)
+            pass
+        else:
+            raise ValueError(f"Unknown header_encoder_mode: {self.header_encoder_mode}")
 
     def forward(self, headers):
         """
@@ -113,14 +140,14 @@ class NaviEmbeddings(nn.Module):
     """
     Embedding module for Navi, positional embeddings & universalheader embeddings are segment-wise.
     """
-    def __init__(self, embeddings, hidden_size=config.HIDDEN_SIZE, ablation_mode="full"):
+    def __init__(self, embeddings, hidden_size=config.HIDDEN_SIZE, ablation_mode="full", header_encoder_mode="full"):
         super(NaviEmbeddings, self).__init__()
         self.word_embeddings = embeddings.word_embeddings
         self.position_embeddings = embeddings.position_embeddings
         self.LayerNorm = embeddings.LayerNorm
         self.dropout = embeddings.dropout
         self.ablation_mode = ablation_mode
-        self.header_encoder = GlobalHeaderEncoder()
+        self.header_encoder = GlobalHeaderEncoder(header_encoder_mode=header_encoder_mode)
 
     def forward(self, input_ids, position_ids=None, header_strings=None, segment_ids=None):
         """
@@ -206,7 +233,7 @@ class NaviForMaskedLM(BertForMaskedLM):
     - "full": Complete model with all components
     - "woSSI": w/o schema induction
     """
-    def __init__(self, model_path=None, hidden_size=config.HIDDEN_SIZE, bert_name=config.BERT_NAME, ablation_mode="full"):
+    def __init__(self, model_path=None, hidden_size=config.HIDDEN_SIZE, bert_name=config.BERT_NAME, ablation_mode="full", header_encoder_mode="full"):
         super().__init__(BertForMaskedLM.from_pretrained(bert_name).config)
 
         pretrained_bert = BertForMaskedLM.from_pretrained(bert_name)
@@ -214,7 +241,8 @@ class NaviForMaskedLM(BertForMaskedLM):
         self.cls = pretrained_bert.cls
 
         self.ablation_mode = ablation_mode
-        self.bert.embeddings = NaviEmbeddings(pretrained_bert.bert.embeddings, hidden_size, ablation_mode)
+        self.header_encoder_mode = header_encoder_mode
+        self.bert.embeddings = NaviEmbeddings(pretrained_bert.bert.embeddings, hidden_size, ablation_mode, header_encoder_mode)
 
         self.segment_projection = SegmentProjection(hidden_size)
 

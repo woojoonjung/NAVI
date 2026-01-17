@@ -19,9 +19,10 @@ import glob
 import re
 import argparse
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Tuple
 from transformers import BertTokenizer
 import unicodedata
+import random
 
 # ============================================================================
 # UTILITY FUNCTIONS
@@ -171,6 +172,224 @@ def flatten_datasets(movie_dir: str, product_dir: str) -> None:
             print(f"    ❌ Error processing {filename}: {str(e)}")
 
 # ============================================================================
+# NEW STEP 1 & 2 IMPLEMENTATIONS (STRATIFIED RESIZE + DIR-BASED FLATTEN)
+# ============================================================================
+
+def resize_product_dataset_stratified(
+    raw_product_dir: str,
+    target_total_rows: int = 480_817,
+    seed: int = 42,
+    flattened_product_dir: str = None,
+) -> None:
+    """
+    Resize Product tables so that the total number of rows across all tables
+    approximately matches `target_total_rows`, using a global sampling ratio.
+
+    The function:
+    - Scans all tables under `raw_product_dir` and counts rows per file.
+    - Computes a global ratio = target_total_rows / current_total_rows (capped at 1.0).
+    - For each table, samples floor(row_count * ratio) rows (at least 1 if row_count > 0).
+    - Rewrites each table file in-place in `raw_product_dir` with the sampled rows.
+    """
+    print("=" * 80)
+    print("📏 STEP 1: Stratified Resizing of Product Dataset")
+    print("=" * 80)
+    
+    # Skip if flattened directory exists (indicates resize was already done)
+    if flattened_product_dir and os.path.exists(flattened_product_dir):
+        flattened_files = glob.glob(os.path.join(flattened_product_dir, "*.jsonl")) + glob.glob(
+            os.path.join(flattened_product_dir, "*.json")
+        )
+        if flattened_files:
+            print(f"⏭️  Skipping resizing: Flattened Product files already exist in {flattened_product_dir}")
+            return
+
+    jsonl_files = glob.glob(os.path.join(raw_product_dir, "*.jsonl")) + glob.glob(
+        os.path.join(raw_product_dir, "*.json")
+    )
+    jsonl_files = sorted(jsonl_files)
+
+    if not jsonl_files:
+        print(f"❌ No Product files found in {raw_product_dir}")
+        return
+
+    # Count rows per file
+    file_row_counts: List[Tuple[str, int]] = []
+    total_rows = 0
+    print("Counting rows per Product table...")
+    for file_path in jsonl_files:
+        filename = os.path.basename(file_path)
+        row_count = 0
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                for _ in f:
+                    row_count += 1
+        except Exception as e:
+            print(f"  ❌ Error counting rows in {filename}: {e}")
+            continue
+
+        file_row_counts.append((file_path, row_count))
+        total_rows += row_count
+        print(f"  {filename}: {row_count} rows")
+
+    if total_rows == 0:
+        print("❌ Total Product rows = 0. Skipping resizing.")
+        return
+
+    ratio = target_total_rows / total_rows
+    if ratio >= 1.0:
+        print(
+            f"ℹ️ Current total Product rows ({total_rows}) "
+            f"is less than or equal to target ({target_total_rows}). "
+            "Skipping downsampling (ratio >= 1.0)."
+        )
+        return
+
+    print(f"\nGlobal sampling ratio: {ratio:.6f}")
+    rng = random.Random(seed)
+
+    # Sample rows per file and rewrite in-place
+    total_sampled = 0
+    for file_path, row_count in file_row_counts:
+        if row_count == 0:
+            continue
+
+        filename = os.path.basename(file_path)
+        original_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+
+        sample_size = int(row_count * ratio)
+        if sample_size <= 0:
+            sample_size = 1
+        if sample_size > row_count:
+            sample_size = row_count
+
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                rows = [line.rstrip("\n") for line in f]
+
+            # Deterministic per-file RNG
+            file_rng = random.Random(rng.randint(0, 2**31 - 1))
+            sampled_rows = file_rng.sample(rows, sample_size)
+
+            with open(file_path, "w", encoding="utf-8") as f:
+                for row in sampled_rows:
+                    f.write(row + "\n")
+
+            new_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+            total_sampled += sample_size
+            print(
+                f"  {filename}: {row_count} → {sample_size} rows | "
+                f"{original_size_mb:.1f}MB → {new_size_mb:.1f}MB"
+            )
+        except Exception as e:
+            print(f"  ❌ Error sampling {filename}: {e}")
+
+    print(
+        f"\n✅ Stratified resizing complete. "
+        f"Target total rows: {target_total_rows}, "
+        f"sampled total rows: {total_sampled}"
+    )
+
+
+def flatten_datasets_with_dirs(
+    raw_movie_dir: str,
+    raw_product_dir: str,
+    out_movie_dir: str,
+    out_product_dir: str,
+) -> None:
+    """Flatten both Movie and Product datasets from raw → flattened directories."""
+    print("\n" + "=" * 80)
+    print("🔄 STEP 2: Flattening Movie and Product Datasets")
+    print("=" * 80)
+
+    # Check if flattened files already exist
+    movie_files_exist = False
+    product_files_exist = False
+    
+    if os.path.exists(out_movie_dir):
+        existing_movie_files = glob.glob(os.path.join(out_movie_dir, "*.jsonl")) + glob.glob(
+            os.path.join(out_movie_dir, "*.json")
+        )
+        if existing_movie_files:
+            movie_files_exist = True
+    
+    if os.path.exists(out_product_dir):
+        existing_product_files = glob.glob(os.path.join(out_product_dir, "*.jsonl")) + glob.glob(
+            os.path.join(out_product_dir, "*.json")
+        )
+        if existing_product_files:
+            product_files_exist = True
+    
+    if movie_files_exist and product_files_exist:
+        print(f"⏭️  Skipping flattening: Flattened files already exist in {out_movie_dir} and {out_product_dir}")
+        return
+
+    # Flatten Movie dataset
+    if not movie_files_exist:
+        print("Flattening Movie dataset...")
+    else:
+        print(f"⏭️  Skipping Movie flattening: Files already exist in {out_movie_dir}")
+    
+    movie_files = glob.glob(os.path.join(raw_movie_dir, "*.jsonl")) + glob.glob(
+        os.path.join(raw_movie_dir, "*.json")
+    )
+
+    for file_path in sorted(movie_files):
+        filename = os.path.basename(file_path)
+        out_path = os.path.join(out_movie_dir, filename)
+        
+        # Skip if this file already exists
+        if os.path.exists(out_path):
+            continue
+            
+        print(f"  Processing {filename}...")
+
+        try:
+            raw_data = load_jsonl(file_path)
+            print(f"    Loaded {len(raw_data)} rows")
+
+            flattened_data = preprocess_jsonl_data(raw_data)
+            print(f"    Flattened to {len(flattened_data)} rows")
+
+            save_jsonl(flattened_data, out_path)
+            print(f"    ✅ Flattened data saved to {out_path}")
+
+        except Exception as e:
+            print(f"    ❌ Error processing {filename}: {str(e)}")
+
+    # Flatten Product dataset
+    if not product_files_exist:
+        print("\nFlattening Product dataset...")
+    else:
+        print(f"\n⏭️  Skipping Product flattening: Files already exist in {out_product_dir}")
+    product_files = glob.glob(os.path.join(raw_product_dir, "*.jsonl")) + glob.glob(
+        os.path.join(raw_product_dir, "*.json")
+    )
+
+    for file_path in sorted(product_files):
+        filename = os.path.basename(file_path)
+        out_path = os.path.join(out_product_dir, filename)
+        
+        # Skip if this file already exists
+        if os.path.exists(out_path):
+            continue
+            
+        print(f"  Processing {filename}...")
+
+        try:
+            raw_data = load_jsonl(file_path)
+            print(f"    Loaded {len(raw_data)} rows")
+
+            flattened_data = preprocess_jsonl_data(raw_data)
+            print(f"    Flattened to {len(flattened_data)} rows")
+
+            save_jsonl(flattened_data, out_path)
+            print(f"    ✅ Flattened data saved to {out_path}")
+
+        except Exception as e:
+            print(f"    ❌ Error processing {filename}: {str(e)}")
+
+# ============================================================================
 # STEP 3: CREATE HELDOUT DATASETS
 # ============================================================================
 
@@ -236,21 +455,23 @@ def extract_heldout_data(input_directory: str, domain: str, start_row_id: int = 
     
     # Set file pattern based on domain
     if domain == 'movie':
-        file_pattern = "Product_*.jsonl"
+        file_pattern = "Movie_*"
     elif domain == 'product':
-        file_pattern = "Product_*.jsonl"
+        file_pattern = "Product_*"
     else:
         raise ValueError(f"Unsupported domain: {domain}. Must be 'movie' or 'product'")
     
-    # Get all JSONL files in the directory
-    jsonl_files = glob.glob(os.path.join(input_directory, file_pattern))
+    # Get all JSON/JSONL files in the directory
+    json_files = glob.glob(os.path.join(input_directory, file_pattern + ".json"))
+    jsonl_files = glob.glob(os.path.join(input_directory, file_pattern + ".jsonl"))
+    all_files = json_files + jsonl_files
     
-    print(f"  Found {len(jsonl_files)} {domain} JSONL files")
+    print(f"  Found {len(all_files)} {domain} files")
     print(f"  Extracting rows with row_id {start_row_id} to {end_row_id}")
     
     extracted_rows = []
     
-    for file_path in sorted(jsonl_files):
+    for file_path in sorted(all_files):
         filename = os.path.basename(file_path)
         
         try:
@@ -285,15 +506,16 @@ def create_heldout_datasets(movie_dir: str, product_dir: str) -> None:
     
     # Create Movie heldout datasets
     print("Creating Movie heldout datasets...")
-    movie_heldout_data = extract_heldout_data(movie_dir, 'movie', 450, 459)
     
-    # Save Movie MP dataset (raw flattened data)
+    # MP dataset: rows 450-459 (10 rows per table for masked prediction)
+    movie_mp_data = extract_heldout_data(movie_dir, 'movie', 450, 459)
     movie_mp_output = "data/WDC_movie_for_mp.jsonl"
-    save_jsonl(movie_heldout_data, movie_mp_output)
-    print(f"  ✅ Movie MP dataset saved: {len(movie_heldout_data)} rows")
+    save_jsonl(movie_mp_data, movie_mp_output)
+    print(f"  ✅ Movie MP dataset saved: {len(movie_mp_data)} rows")
     
-    # Create Movie CLS dataset (with genre unification)
-    movie_cls_data = [unify_genre_keys(row) for row in movie_heldout_data]
+    # CLS dataset: rows 0-449 (450 rows per table for classification)
+    movie_cls_data = extract_heldout_data(movie_dir, 'movie', 0, 449)
+    movie_cls_data = [unify_genre_keys(row) for row in movie_cls_data]
     movie_cls_data = [row for row in movie_cls_data if "genres" in row.keys() and row["genres"] and row["genres"] != "None"]
     movie_cls_output = "data/WDC_movie_for_cls.jsonl"
     save_jsonl(movie_cls_data, movie_cls_output)
@@ -301,15 +523,16 @@ def create_heldout_datasets(movie_dir: str, product_dir: str) -> None:
     
     # Create Product heldout datasets
     print("\nCreating Product heldout datasets...")
-    product_heldout_data = extract_heldout_data(product_dir, 'product', 450, 459)
     
-    # Save Product MP dataset (raw flattened data)
+    # MP dataset: rows 450-459 (10 rows per table for masked prediction)
+    product_mp_data = extract_heldout_data(product_dir, 'product', 450, 459)
     product_mp_output = "data/WDC_product_for_mp.jsonl"
-    save_jsonl(product_heldout_data, product_mp_output)
-    print(f"  ✅ Product MP dataset saved: {len(product_heldout_data)} rows")
+    save_jsonl(product_mp_data, product_mp_output)
+    print(f"  ✅ Product MP dataset saved: {len(product_mp_data)} rows")
     
-    # Create Product CLS dataset (with category unification)
-    product_cls_data = [unify_category_keys(row) for row in product_heldout_data]
+    # CLS dataset: rows 0-449 (450 rows per table for classification)
+    product_cls_data = extract_heldout_data(product_dir, 'product', 0, 449)
+    product_cls_data = [unify_category_keys(row) for row in product_cls_data]
     product_cls_data = [row for row in product_cls_data if "category" in row.keys() and row["category"] and row["category"] != "None"]
     product_cls_output = "data/WDC_product_for_cls.jsonl"
     save_jsonl(product_cls_data, product_cls_output)
@@ -669,6 +892,396 @@ def clean_table_data(json_data, tokenizer_name="bert-base-uncased",
         print(f"🚫 Skipped {skipped_non_bert} non-BERT-compatible tables.")
     return processed_data
 
+
+def clean_datasets_with_dirs(
+    flat_movie_dir: str,
+    flat_product_dir: str,
+    out_movie_dir: str,
+    out_product_dir: str,
+) -> None:
+    """
+    Clean flattened Movie and Product datasets into dedicated cleaned directories.
+
+    Reads from `flat_*_dir` (flattened tables) and writes cleaned tables to
+    `out_*_dir`, preserving filenames.
+    """
+    print("\n" + "=" * 80)
+    print("🧹 STEP 3: Cleaning Flattened Datasets")
+    print("=" * 80)
+
+    # Check if cleaned files already exist
+    movie_files_exist = False
+    product_files_exist = False
+    
+    if os.path.exists(out_movie_dir):
+        existing_movie_files = glob.glob(os.path.join(out_movie_dir, "*.jsonl")) + glob.glob(
+            os.path.join(out_movie_dir, "*.json")
+        )
+        if existing_movie_files:
+            movie_files_exist = True
+    
+    if os.path.exists(out_product_dir):
+        existing_product_files = glob.glob(os.path.join(out_product_dir, "*.jsonl")) + glob.glob(
+            os.path.join(out_product_dir, "*.json")
+        )
+        if existing_product_files:
+            product_files_exist = True
+    
+    if movie_files_exist and product_files_exist:
+        print(f"⏭️  Skipping cleaning: Cleaned files already exist in {out_movie_dir} and {out_product_dir}")
+        return
+
+    # Clean Movie dataset
+    if not movie_files_exist:
+        print("Cleaning Movie dataset...")
+    else:
+        print(f"⏭️  Skipping Movie cleaning: Files already exist in {out_movie_dir}")
+    
+    movie_files = glob.glob(os.path.join(flat_movie_dir, "*.jsonl")) + glob.glob(
+        os.path.join(flat_movie_dir, "*.json")
+    )
+
+    for file_path in sorted(movie_files):
+        filename = os.path.basename(file_path)
+        out_path = os.path.join(out_movie_dir, filename)
+        
+        # Skip if this file already exists
+        if os.path.exists(out_path):
+            continue
+            
+        print(f"  Processing {filename}...")
+
+        try:
+            data = load_jsonl(file_path)
+            print(f"    Loaded {len(data)} rows")
+
+            if len(data) == 0:
+                print("    ⚠️  No data found, skipping...")
+                continue
+
+            table_data = [(i, row) for i, row in enumerate(data)]
+
+            print("    Applying comprehensive table cleaning...")
+            cleaned_table_data = clean_table_data(
+                table_data,
+                tokenizer_name="bert-base-uncased",
+                max_tokens=512,
+                max_indexed_fields=3,
+                max_tokens_per_field=20,
+                skip_non_english=True,
+                skip_non_bert=True,
+                english_ratio_threshold=0.7,
+                unk_threshold=0.3,
+                min_text_fields=2,
+            )
+
+            cleaned_data = [row for _, row in cleaned_table_data]
+            print(f"    Final cleaned data: {len(cleaned_data)} rows")
+
+            save_jsonl(cleaned_data, out_path)
+            print(f"    ✅ Cleaned data saved to {out_path}")
+
+        except Exception as e:
+            print(f"    ❌ Error processing {filename}: {str(e)}")
+            continue
+
+    # Clean Product dataset
+    if not product_files_exist:
+        print("\nCleaning Product dataset...")
+    else:
+        print(f"\n⏭️  Skipping Product cleaning: Files already exist in {out_product_dir}")
+    product_files = glob.glob(os.path.join(flat_product_dir, "*.jsonl")) + glob.glob(
+        os.path.join(flat_product_dir, "*.json")
+    )
+
+    for file_path in sorted(product_files):
+        filename = os.path.basename(file_path)
+        out_path = os.path.join(out_product_dir, filename)
+        
+        # Skip if this file already exists
+        if os.path.exists(out_path):
+            continue
+            
+        print(f"  Processing {filename}...")
+
+        try:
+            data = load_jsonl(file_path)
+            print(f"    Loaded {len(data)} rows")
+
+            if len(data) == 0:
+                print("    ⚠️  No data found, skipping...")
+                continue
+
+            table_data = [(i, row) for i, row in enumerate(data)]
+
+            print("    Applying comprehensive table cleaning...")
+            cleaned_table_data = clean_table_data(
+                table_data,
+                tokenizer_name="bert-base-uncased",
+                max_tokens=512,
+                max_indexed_fields=3,
+                max_tokens_per_field=20,
+                skip_non_english=True,
+                skip_non_bert=True,
+                english_ratio_threshold=0.7,
+                unk_threshold=0.3,
+                min_text_fields=2,
+            )
+
+            cleaned_data = [row for _, row in cleaned_table_data]
+            print(f"    Final cleaned data: {len(cleaned_data)} rows")
+
+            save_jsonl(cleaned_data, out_path)
+            print(f"    ✅ Cleaned data saved to {out_path}")
+
+        except Exception as e:
+            print(f"    ❌ Error processing {filename}: {str(e)}")
+            continue
+
+
+def split_cleaned_tables_to_splits(
+    clean_movie_dir: str,
+    clean_product_dir: str,
+    movie_train_dir: str,
+    movie_val_dir: str,
+    product_train_dir: str,
+    product_val_dir: str,
+    train_ratio: float = 0.8,
+    val_ratio: float = 0.1,
+    seed: int = 42,
+):
+    """
+    Split cleaned Movie and Product tables into train/validation/test per table.
+
+    - Train: `train_ratio` (default 0.8)
+    - Validation: `val_ratio` (default 0.1)
+    - Test: remaining portion (default 0.1)
+
+    Per-table train/validation splits are written to the given directories.
+    Test rows are accumulated and returned for heldout WDC file creation.
+    """
+    print("\n" + "=" * 80)
+    print("✂️  STEP 4: Splitting Cleaned Tables into Train/Validation/Test")
+    print("=" * 80)
+
+    # Check if train/val splits already exist
+    movie_splits_exist = False
+    product_splits_exist = False
+    
+    if os.path.exists(movie_train_dir) and os.path.exists(movie_val_dir):
+        movie_train_files = glob.glob(os.path.join(movie_train_dir, "*.jsonl")) + glob.glob(
+            os.path.join(movie_train_dir, "*.json")
+        )
+        movie_val_files = glob.glob(os.path.join(movie_val_dir, "*.jsonl")) + glob.glob(
+            os.path.join(movie_val_dir, "*.json")
+        )
+        if movie_train_files and movie_val_files:
+            movie_splits_exist = True
+    
+    if os.path.exists(product_train_dir) and os.path.exists(product_val_dir):
+        product_train_files = glob.glob(os.path.join(product_train_dir, "*.jsonl")) + glob.glob(
+            os.path.join(product_train_dir, "*.json")
+        )
+        product_val_files = glob.glob(os.path.join(product_val_dir, "*.jsonl")) + glob.glob(
+            os.path.join(product_val_dir, "*.json")
+        )
+        if product_train_files and product_val_files:
+            product_splits_exist = True
+    
+    # Check if WDC files exist - if they do, we can skip splitting entirely
+    movie_test_dir = "data/cleaned/Movie/test"
+    product_test_dir = "data/cleaned/Product/test"
+    wdc_files_exist = (
+        os.path.exists(os.path.join(movie_test_dir, "WDC_movie_for_mp.jsonl")) and
+        os.path.exists(os.path.join(movie_test_dir, "WDC_movie_for_cls.jsonl")) and
+        os.path.exists(os.path.join(product_test_dir, "WDC_product_for_mp.jsonl")) and
+        os.path.exists(os.path.join(product_test_dir, "WDC_product_for_cls.jsonl"))
+    )
+    
+    if wdc_files_exist and movie_splits_exist and product_splits_exist:
+        print(f"⏭️  Skipping splitting: Train/validation splits and WDC test files already exist")
+        print(f"    Movie: {movie_train_dir} and {movie_val_dir}")
+        print(f"    Product: {product_train_dir} and {product_val_dir}")
+        return [], []
+
+    rng = random.Random(seed)
+
+    def _split_domain(clean_dir: str, train_dir: str, val_dir: str, label: str, skip_if_exists: bool = False):
+        os.makedirs(train_dir, exist_ok=True)
+        os.makedirs(val_dir, exist_ok=True)
+
+        files = glob.glob(os.path.join(clean_dir, "*.jsonl")) + glob.glob(
+            os.path.join(clean_dir, "*.json")
+        )
+        files = sorted(files)
+
+        all_test_rows = []
+        skipped_count = 0
+        processed_count = 0
+        
+        if skip_if_exists:
+            print(f"\nChecking {label} tables (some splits may already exist)...")
+        else:
+            print(f"\nSplitting {label} tables...")
+        
+        for file_path in files:
+            filename = os.path.basename(file_path)
+            out_train_path = os.path.join(train_dir, filename)
+            out_val_path = os.path.join(val_dir, filename)
+            
+            # Skip if train and val files already exist
+            if os.path.exists(out_train_path) and os.path.exists(out_val_path):
+                skipped_count += 1
+                continue
+            
+            processed_count += 1
+                
+            rows = load_jsonl(file_path)
+            n = len(rows)
+            print(f"  {filename}: {n} rows before split")
+
+            if n == 0:
+                print("    ⚠️  No rows, skipping.")
+                continue
+
+            indices = list(range(n))
+            rng.shuffle(indices)
+
+            n_train = int(n * train_ratio)
+            n_val = int(n * val_ratio)
+            if n_train + n_val > n:
+                n_val = max(0, n - n_train)
+            n_test = n - n_train - n_val
+
+            train_idx = indices[:n_train]
+            val_idx = indices[n_train : n_train + n_val]
+            test_idx = indices[n_train + n_val :]
+
+            train_rows = [rows[i] for i in train_idx]
+            val_rows = [rows[i] for i in val_idx]
+            test_rows = [rows[i] for i in test_idx]
+
+            save_jsonl(train_rows, out_train_path)
+            save_jsonl(val_rows, out_val_path)
+
+            all_test_rows.extend(test_rows)
+
+            print(
+                f"    Split -> train: {len(train_rows)}, "
+                f"validation: {len(val_rows)}, test: {len(test_rows)}"
+            )
+
+        if skip_if_exists and processed_count == 0:
+            print(f"\n⏭️  All {label} tables already split. Skipped {skipped_count} files.")
+        else:
+            print(
+                f"\n✅ Finished splitting {label} tables. "
+                f"Processed: {processed_count}, Skipped: {skipped_count}, "
+                f"Accumulated test rows: {len(all_test_rows)}"
+            )
+        return all_test_rows
+
+    movie_test_rows = _split_domain(
+        clean_movie_dir, movie_train_dir, movie_val_dir, label="Movie", skip_if_exists=movie_splits_exist
+    )
+    product_test_rows = _split_domain(
+        clean_product_dir, product_train_dir, product_val_dir, label="Product", skip_if_exists=product_splits_exist
+    )
+
+    return movie_test_rows, product_test_rows
+
+
+def create_heldout_datasets_from_test_rows(
+    movie_test_rows,
+    product_test_rows,
+    out_dir: str,
+) -> None:
+    """
+    Create heldout WDC datasets for MP and CLS from aggregated test rows.
+
+    Outputs (in domain-specific test directories):
+      - data/cleaned/Movie/test/WDC_movie_for_mp.jsonl
+      - data/cleaned/Movie/test/WDC_movie_for_cls.jsonl
+      - data/cleaned/Product/test/WDC_product_for_mp.jsonl
+      - data/cleaned/Product/test/WDC_product_for_cls.jsonl
+    """
+    print("\n" + "=" * 80)
+    print("📤 STEP 5: Creating Heldout Datasets from Test Splits")
+    print("=" * 80)
+
+    # Create domain-specific test directories
+    movie_test_dir = "data/cleaned/Movie/test"
+    product_test_dir = "data/cleaned/Product/test"
+    os.makedirs(movie_test_dir, exist_ok=True)
+    os.makedirs(product_test_dir, exist_ok=True)
+
+    # Check if WDC files already exist and are non-empty
+    movie_mp_output = os.path.join(movie_test_dir, "WDC_movie_for_mp.jsonl")
+    movie_cls_output = os.path.join(movie_test_dir, "WDC_movie_for_cls.jsonl")
+    product_mp_output = os.path.join(product_test_dir, "WDC_product_for_mp.jsonl")
+    product_cls_output = os.path.join(product_test_dir, "WDC_product_for_cls.jsonl")
+    
+    all_wdc_exist = (
+        os.path.exists(movie_mp_output) and os.path.getsize(movie_mp_output) > 0 and
+        os.path.exists(movie_cls_output) and os.path.getsize(movie_cls_output) > 0 and
+        os.path.exists(product_mp_output) and os.path.getsize(product_mp_output) > 0 and
+        os.path.exists(product_cls_output) and os.path.getsize(product_cls_output) > 0
+    )
+    
+    if all_wdc_exist:
+        print(f"⏭️  Skipping heldout creation: All WDC test files already exist")
+        print(f"    Movie test files in: {movie_test_dir}")
+        print(f"    Product test files in: {product_test_dir}")
+        return
+    
+    # If test rows are empty but we're being called, we may need to skip
+    if not movie_test_rows and not product_test_rows:
+        print("⚠️  Warning: No test rows provided. Skipping heldout creation.")
+        return
+
+    # Movie MP: all Movie test rows
+    if not os.path.exists(movie_mp_output) or os.path.getsize(movie_mp_output) == 0:
+        save_jsonl(movie_test_rows, movie_mp_output)
+        print(f"  ✅ Movie MP dataset saved: {len(movie_test_rows)} rows -> {movie_mp_output}")
+    else:
+        print(f"  ⏭️  Skipping Movie MP: File already exists -> {movie_mp_output}")
+
+    # Movie CLS: Movie test rows with valid genres
+    if not os.path.exists(movie_cls_output) or os.path.getsize(movie_cls_output) == 0:
+        movie_cls_data = [unify_genre_keys(row) for row in movie_test_rows]
+        movie_cls_data = [
+            row for row in movie_cls_data if "genres" in row and row["genres"] and row["genres"] != "None"
+        ]
+        save_jsonl(movie_cls_data, movie_cls_output)
+        print(f"  ✅ Movie CLS dataset saved: {len(movie_cls_data)} rows -> {movie_cls_output}")
+    else:
+        print(f"  ⏭️  Skipping Movie CLS: File already exists -> {movie_cls_output}")
+
+    # Product MP: all Product test rows
+    if not os.path.exists(product_mp_output) or os.path.getsize(product_mp_output) == 0:
+        save_jsonl(product_test_rows, product_mp_output)
+        print(
+            f"  ✅ Product MP dataset saved: {len(product_test_rows)} rows -> {product_mp_output}"
+        )
+    else:
+        print(f"  ⏭️  Skipping Product MP: File already exists -> {product_mp_output}")
+
+    # Product CLS: Product test rows with valid category
+    if not os.path.exists(product_cls_output) or os.path.getsize(product_cls_output) == 0:
+        product_cls_data = [unify_category_keys(row) for row in product_test_rows]
+        product_cls_data = [
+            row
+            for row in product_cls_data
+            if "category" in row and row["category"] and row["category"] != "None"
+        ]
+        save_jsonl(product_cls_data, product_cls_output)
+        print(
+            f"  ✅ Product CLS dataset saved: {len(product_cls_data)} rows -> {product_cls_output}"
+        )
+    else:
+        print(f"  ⏭️  Skipping Product CLS: File already exists -> {product_cls_output}")
+
+
 def clean_training_datasets(movie_dir: str, product_dir: str) -> None:
     """Clean training datasets in both Movie and Product directories."""
     print("\n" + "="*80)
@@ -774,55 +1387,150 @@ def clean_training_datasets(movie_dir: str, product_dir: str) -> None:
 # ============================================================================
 
 def main():
-    parser = argparse.ArgumentParser(description='Unified preprocessing pipeline for NAVI dataset')
-    parser.add_argument('--movie_dir', type=str, default='data/Movie_top100',
-                        help='Movie dataset directory')
-    parser.add_argument('--product_dir', type=str, default='data/Product_top100',
-                        help='Product dataset directory')
-    parser.add_argument('--product_max_rows', type=int, default=5000,
-                        help='Maximum rows for product dataset resizing')
-    parser.add_argument('--heldout_start', type=int, default=450,
-                        help='Starting row_id for heldout dataset (inclusive)')
-    parser.add_argument('--heldout_end', type=int, default=459,
-                        help='Ending row_id for heldout dataset (inclusive)')
-    
+    parser = argparse.ArgumentParser(
+        description="Unified preprocessing pipeline for NAVI dataset"
+    )
+    parser.add_argument(
+        "--raw_movie_dir",
+        type=str,
+        default="data/raw/Movie_top100",
+        help="Raw Movie dataset directory",
+    )
+    parser.add_argument(
+        "--raw_product_dir",
+        type=str,
+        default="data/raw/Product_top100",
+        help="Raw Product dataset directory",
+    )
+    parser.add_argument(
+        "--flattened_movie_dir",
+        type=str,
+        default="data/flattened/Movie_top100",
+        help="Output directory for flattened Movie tables",
+    )
+    parser.add_argument(
+        "--flattened_product_dir",
+        type=str,
+        default="data/flattened/Product_top100",
+        help="Output directory for flattened Product tables",
+    )
+    parser.add_argument(
+        "--cleaned_movie_dir",
+        type=str,
+        default="data/cleaned/Movie_top100",
+        help="Output directory for cleaned Movie tables",
+    )
+    parser.add_argument(
+        "--cleaned_product_dir",
+        type=str,
+        default="data/cleaned/Product_top100",
+        help="Output directory for cleaned Product tables",
+    )
+    parser.add_argument(
+        "--target_product_rows",
+        type=int,
+        default=480_817,
+        help="Target total number of rows across all Product tables after resizing",
+    )
+    parser.add_argument(
+        "--train_ratio",
+        type=float,
+        default=0.8,
+        help="Train split ratio for each cleaned table",
+    )
+    parser.add_argument(
+        "--val_ratio",
+        type=float,
+        default=0.1,
+        help="Validation split ratio for each cleaned table",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed for deterministic sampling and splitting",
+    )
+
     args = parser.parse_args()
     
     print("🚀 UNIFIED PREPROCESSING PIPELINE")
-    print("="*80)
-    print(f"Movie directory: {args.movie_dir}")
-    print(f"Product directory: {args.product_dir}")
-    print(f"Product max rows: {args.product_max_rows}")
-    print(f"Heldout range: {args.heldout_start}-{args.heldout_end}")
-    print("="*80)
-    
-    # Step 1: Resize product dataset
-    resize_product_dataset(args.product_dir, args.product_max_rows)
-    
-    # Step 2: Flatten both movie and product datasets
-    flatten_datasets(args.movie_dir, args.product_dir)
-    
-    # Step 3: Create heldout datasets for masked prediction and classification
-    create_heldout_datasets(args.movie_dir, args.product_dir)
-    
-    # Step 4: Remove heldout rows from training datasets
-    remove_heldout_rows_from_datasets(args.movie_dir, args.product_dir, args.heldout_end)
-    
-    # Step 5: Clean training datasets
-    clean_training_datasets(args.movie_dir, args.product_dir)
-    
-    print("\n" + "="*80)
+    print("=" * 80)
+    print(f"Raw Movie directory: {args.raw_movie_dir}")
+    print(f"Raw Product directory: {args.raw_product_dir}")
+    print(f"Flattened Movie directory: {args.flattened_movie_dir}")
+    print(f"Flattened Product directory: {args.flattened_product_dir}")
+    print(f"Cleaned Movie directory: {args.cleaned_movie_dir}")
+    print(f"Cleaned Product directory: {args.cleaned_product_dir}")
+    print(f"Target Product total rows: {args.target_product_rows}")
+    print(f"Train ratio: {args.train_ratio}")
+    print(f"Validation ratio: {args.val_ratio}")
+    print(f"Random seed: {args.seed}")
+    print("=" * 80)
+
+    # Step 1: Stratified resize for Product raw tables
+    resize_product_dataset_stratified(
+        args.raw_product_dir, args.target_product_rows, args.seed, args.flattened_product_dir
+    )
+
+    # Step 2: Flatten both Movie and Product datasets (raw → flattened)
+    flatten_datasets_with_dirs(
+        args.raw_movie_dir,
+        args.raw_product_dir,
+        args.flattened_movie_dir,
+        args.flattened_product_dir,
+    )
+
+    # Step 3: Clean flattened datasets (flattened → cleaned)
+    clean_datasets_with_dirs(
+        args.flattened_movie_dir,
+        args.flattened_product_dir,
+        args.cleaned_movie_dir,
+        args.cleaned_product_dir,
+    )
+
+    # Step 4: Split cleaned tables into train/validation/test
+    movie_train_dir = "data/cleaned/Movie/train"
+    movie_val_dir = "data/cleaned/Movie/validation"
+    product_train_dir = "data/cleaned/Product/train"
+    product_val_dir = "data/cleaned/Product/validation"
+
+    movie_test_rows, product_test_rows = split_cleaned_tables_to_splits(
+        args.cleaned_movie_dir,
+        args.cleaned_product_dir,
+        movie_train_dir,
+        movie_val_dir,
+        product_train_dir,
+        product_val_dir,
+        train_ratio=args.train_ratio,
+        val_ratio=args.val_ratio,
+        seed=args.seed,
+    )
+
+    # Step 5: Create heldout WDC datasets from test splits
+    # Note: test_out_dir parameter is kept for backward compatibility but files are written to domain-specific directories
+    test_out_dir = "data/cleaned/test"  # Kept for reference, but not used directly
+    create_heldout_datasets_from_test_rows(
+        movie_test_rows,
+        product_test_rows,
+        test_out_dir,
+    )
+
+    print("\n" + "=" * 80)
     print("🎉 PREPROCESSING PIPELINE COMPLETE!")
-    print("="*80)
-    print("📁 Output files created:")
-    print("  - data/WDC_movie_for_mp.jsonl (Movie heldout for masked prediction)")
-    print("  - data/WDC_movie_for_cls.jsonl (Movie heldout for classification)")
-    print("  - data/WDC_product_for_mp.jsonl (Product heldout for masked prediction)")
-    print("  - data/WDC_product_for_cls.jsonl (Product heldout for classification)")
-    print(f"  - {args.movie_dir}/ (Cleaned Movie training datasets)")
-    print(f"  - {args.product_dir}/ (Cleaned Product training datasets)")
-    print("\n💡 All datasets are flattened. Training datasets are cleaned.")
-    print("   Heldout datasets are kept raw for fair evaluation.")
+    print("=" * 80)
+    print("📁 Output artifacts:")
+    print(f"  - {args.flattened_movie_dir}/ (Flattened Movie tables)")
+    print(f"  - {args.flattened_product_dir}/ (Flattened Product tables)")
+    print(f"  - {args.cleaned_movie_dir}/ (Cleaned Movie tables)")
+    print(f"  - {args.cleaned_product_dir}/ (Cleaned Product tables)")
+    print("  - data/cleaned/Movie/train/ (Movie train split)")
+    print("  - data/cleaned/Movie/validation/ (Movie validation split)")
+    print("  - data/cleaned/Product/train/ (Product train split)")
+    print("  - data/cleaned/Product/validation/ (Product validation split)")
+    print("  - data/cleaned/Movie/test/WDC_movie_for_mp.jsonl (Movie heldout for MP)")
+    print("  - data/cleaned/Movie/test/WDC_movie_for_cls.jsonl (Movie heldout for CLS)")
+    print("  - data/cleaned/Product/test/WDC_product_for_mp.jsonl (Product heldout for MP)")
+    print("  - data/cleaned/Product/test/WDC_product_for_cls.jsonl (Product heldout for CLS)")
 
 if __name__ == "__main__":
     main()

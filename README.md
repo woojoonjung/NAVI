@@ -30,40 +30,81 @@ python -c "from model.navi import NaviForMaskedLM; from dataset.dataset import N
 ## Data Preparation
 
 ### Download Datasets
-The datasets used for training are publicly available at Web Data Commons (https://webdatacommons.org/structureddata/schemaorgtables/2023/).
+The datasets used for training are publicly available at Web Data Commons (`https://webdatacommons.org/structureddata/schemaorgtables/2023/`).
 We constructed our pretraining data from the Top-100 subsets of the Product and Movie domains.
 
-**Required Directory Structure**
-```
+### Directory Structure
+
+Raw data should be placed under `data/raw/...`. The preprocessing pipeline will create all derived artifacts under `data/flattened/...` and `data/cleaned/...`:
+
+```text
 data/
-├── Movie_top100/ # Raw Movie dataset files
-│ ├── Movie_.jsonl # Individual table files
-│ └── ...
-├── Product_top100/ # Raw Product dataset files
-│ ├── Product_.jsonl # Individual table files
-│ └── ...
-└── (output files will be created here)
+├── raw/
+│   ├── Movie_top100/              # Raw Movie tables
+│   │   ├── Movie_*.jsonl
+│   │   └── ...
+│   └── Product_top100/            # Raw Product tables
+│       ├── Product_*.jsonl
+│       └── ...
+├── flattened/
+│   ├── Movie_top100/              # Flattened Movie tables
+│   └── Product_top100/            # Flattened Product tables
+└── cleaned/
+    ├── Movie_top100/              # Cleaned per-table Movie data
+    ├── Product_top100/            # Cleaned per-table Product data
+    ├── Movie/
+    │   ├── train/                 # 80% split per cleaned Movie table
+    │   └── validation/            # 10% split per cleaned Movie table
+    ├── Product/
+    │   ├── train/                 # 80% split per cleaned Product table
+    │   └── validation/            # 10% split per cleaned Product table
+    └── test/
+        ├── WDC_movie_for_mp.jsonl
+        ├── WDC_movie_for_cls.jsonl
+        ├── WDC_product_for_mp.jsonl
+        └── WDC_product_for_cls.jsonl
 ```
 
 ### Preprocessing
 
-Our unified preprocessing pipeline follows a 5-step workflow to prepare the data for training and evaluation:
+The unified preprocessing pipeline in `dataset/preprocess.py` follows a 5-step workflow:
 
-#### Step 1: Resize Product Dataset
+#### Step 1: Stratified Resize of Product Dataset
+- Counts total rows across all raw Product tables under `data/raw/Product_top100`.
+- Computes a global sampling ratio so the total Product rows approximately match the Movie total (default target: **480,817**).
+- Rewrites each raw Product table in-place with a random, deterministic subset of rows.
 
 #### Step 2: Flatten Both Datasets
+- Reads raw Movie/Product tables from `data/raw/...`.
+- Flattens nested JSON structures into flat key–value maps.
+- Writes flattened tables to:
+  - `data/flattened/Movie_top100`
+  - `data/flattened/Product_top100`
 
-#### Step 3: Create Heldout Datasets
-- *Output Files*:
-  - `data/WDC_movie_for_mp.jsonl` - Movie heldout for masked prediction
-  - `data/WDC_movie_for_cls.jsonl` - Movie heldout for rest of the experiments (unified `genres` field)
-  - `data/WDC_product_for_mp.jsonl` - Product heldout for masked prediction  
-  - `data/WDC_product_for_cls.jsonl` - Product heldout for rest of the experiments (unified `category` field)
+#### Step 3: Clean Flattened Datasets
+- Applies language filtering (keeps primarily English tables).
+- Ensures BERT tokenizability, truncates overly long fields, and subsamples indexed fields.
+- Writes cleaned per-table data to:
+  - `data/cleaned/Movie_top100`
+  - `data/cleaned/Product_top100`
 
-#### Step 4: Remove Heldout Rows from Training Data
+#### Step 4: Create Train / Validation / Test Splits
+- For each cleaned table (Movie and Product):
+  - Shuffles rows with a fixed random seed.
+  - Splits into **80% train**, **10% validation**, **10% test**.
+- Writes per-table train/validation splits to:
+  - `data/cleaned/Movie/train`, `data/cleaned/Movie/validation`
+  - `data/cleaned/Product/train`, `data/cleaned/Product/validation`
+- Aggregates the remaining 10% test rows in memory for heldout file creation.
 
-#### Step 5: Clean Training Datasets
-- *Output*: Cleaned Movie_top100 and Product_top100 files
+#### Step 5: Create Heldout Datasets (MP / CLS)
+- From the aggregated Movie test rows:
+  - `WDC_movie_for_mp.jsonl`: all Movie test rows (for masked prediction).
+  - `WDC_movie_for_cls.jsonl`: Movie test rows with a unified non-empty `genres` field.
+- From the aggregated Product test rows:
+  - `WDC_product_for_mp.jsonl`: all Product test rows (for masked prediction).
+  - `WDC_product_for_cls.jsonl`: Product test rows with a unified non-empty `category` field.
+- All four files are written to `data/cleaned/test/`.
 
 ```bash
 # Run with default settings
@@ -71,11 +112,16 @@ python dataset/preprocess.py
 
 # Run with custom settings
 python dataset/preprocess.py \
-    --movie_dir data/Movie_top100 \
-    --product_dir data/Product_top100 \
-    --product_max_rows 5000 \
-    --heldout_start 450 \
-    --heldout_end 459
+    --raw_movie_dir data/raw/Movie_top100 \
+    --raw_product_dir data/raw/Product_top100 \
+    --flattened_movie_dir data/flattened/Movie_top100 \
+    --flattened_product_dir data/flattened/Product_top100 \
+    --cleaned_movie_dir data/cleaned/Movie_top100 \
+    --cleaned_product_dir data/cleaned/Product_top100 \
+    --target_product_rows 480817 \
+    --train_ratio 0.8 \
+    --val_ratio 0.1 \
+    --seed 42
 ```
 
 

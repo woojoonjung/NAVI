@@ -1,0 +1,24 @@
+{
+  "movie": {
+    "director": ["auteur", "filmmaker", "helmer"],
+    "actors": ["cast", "starring", "performers", "players"],
+    "actor": ["performer", "player"],
+    "duration": ["runtime", "length", "running_time"],
+    "genre": ["genres", "category", "type", "classification"],
+    "name": ["title", "film_title", "movie_title"],
+    "datecreated": ["release_year", "year_released"],
+    "datepublished": ["release_year", "year_released"],
+    "aggregaterating": ["score", "imdb_rating", "rating_score"]
+  },
+  "product": {
+    "price": ["cost", "amount", "price_value"],
+    "category": ["categories", "type", "classification", "group"],
+    "name": ["product_name", "item_name"],
+    "description": ["summary", "details", "info", "specification"],
+    "brand": ["manufacturer", "maker", "company"],
+    "sku": ["stock_keeping_unit", "stock_keeping_unit_number", "stock_keeping_unit_code"],
+    "model": ["model_number", "model_name"],
+    "aggregaterating": ["score", "rating_score", "user_rating"]
+  }
+}
+

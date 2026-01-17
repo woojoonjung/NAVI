@@ -16,9 +16,8 @@ from sklearn.cluster import AgglomerativeClustering
 import umap.plot
 from experiments.experiment_utils import b_cubed_score
 import matplotlib.pyplot as plt
-import seaborn as sns
 
-plt.rcParams['axes.titlesize'] = 19
+plt.rcParams['axes.titlesize'] = 20
 plt.rcParams['legend.fontsize'] = 19
 plt.rcParams['xtick.labelsize'] = 15
 plt.rcParams['ytick.labelsize'] = 15
@@ -97,8 +96,10 @@ def get_embedding_path(artifacts_dir: Path, model_name: str, domain: str, ablati
     Determines the correct path for embeddings based on model type.
     """
     if ablation_mode:
-        # For ablation models, embeddings are in artifacts_dir/emb/ablation/model_name/domain/
-        return artifacts_dir / 'emb' / 'ablation' / model_name / domain / 'header_embeds.parquet'
+        # For ablation models, embeddings are in artifacts_dir/emb/ablation/navi_{domain}_{model_name}/domain/
+        domain_artifact = domain.split('/')[-1].lower()  # 'cleaned/Movie' -> 'movie'
+        ablation_dir = f'navi_{domain_artifact}_{model_name}'
+        return artifacts_dir / 'emb' / 'ablation' / ablation_dir / domain / 'header_embeds.parquet'
     else:
         # For regular models, embeddings are in artifacts_dir/emb/model_name/domain/
         return artifacts_dir / 'emb' / model_name / domain / 'header_embeds.parquet'
@@ -113,8 +114,12 @@ def create_actor_clustering_visualization(df: pd.DataFrame, mapper, model_name: 
         logging.info(f"Skipping actor clustering visualization for non-movie domain: {domain}")
         return
     
-    # Load the canonical map to get actor headers
-    canonical_path = artifacts_dir / f"canonical_proposals_{domain}.json"
+    # Load the human-curated canonical sets file
+    domain_artifact = domain.split('/')[-1].lower()  # 'cleaned/Movie' -> 'movie'
+    canonical_path = artifacts_dir / f"canonical_sets_{domain_artifact}.json"
+    if not canonical_path.exists():
+        logging.error(f"Canonical sets file not found at {canonical_path}. Please ensure the curated canonical sets file exists.")
+        return
     with open(canonical_path, 'r') as f:
         nested_map = json.load(f)
     
@@ -152,15 +157,22 @@ def create_actor_clustering_visualization(df: pd.DataFrame, mapper, model_name: 
     fig, ax = plt.subplots(figsize=(7, 5))
     
     # Create scatter plot with different colors for each actor type
-    scatter = sns.scatterplot(
-        x=actor_embeddings[:, 0],
-        y=actor_embeddings[:, 1],
-        hue=actor_df['actor_type'],
-        style=actor_df['actor_type'],
-        ax=ax,
-        legend='full',
-        s=100
-    )
+    actor_types = actor_df['actor_type'].unique()
+    colors = plt.cm.tab10(np.linspace(0, 1, len(actor_types)))
+    markers = ['o', 's', '^', 'D', 'v', '<', '>', 'p', '*', 'h']
+    
+    for i, actor_type in enumerate(actor_types):
+        mask = actor_df['actor_type'] == actor_type
+        ax.scatter(
+            actor_embeddings[mask, 0],
+            actor_embeddings[mask, 1],
+            c=colors[i],
+            marker=markers[i % len(markers)],
+            label=actor_type,
+            s=100
+        )
+    
+    ax.legend(loc='best')
     
     # Add header labels
     # for i, (idx, row) in enumerate(actor_df.iterrows()):
@@ -170,6 +182,8 @@ def create_actor_clustering_visualization(df: pd.DataFrame, mapper, model_name: 
     #                fontsize=8, alpha=0.7)
     
     domain_display = domain.replace('Quarter_', '').replace('_top100_cleaned', '')
+    # Sanitize domain_display for use in filenames
+    clean_domain_display = domain_display.replace('/', '_').replace('\\', '_').replace(':', '_')
     
     # Create appropriate title and filename
     if ablation_mode:
@@ -177,12 +191,12 @@ def create_actor_clustering_visualization(df: pd.DataFrame, mapper, model_name: 
         plot_dir = artifacts_dir / 'plots' / 'ablation'
         plot_dir.mkdir(parents=True, exist_ok=True)
         clean_model_name = model_name.replace('/', '_').replace('\\', '_').replace(':', '_')
-        plot_path = plot_dir / f'ablation_{clean_model_name}_{domain_display}_actor_clustering.png'
+        plot_path = plot_dir / f'ablation_{clean_model_name}_{clean_domain_display}_actor_clustering.png'
     else:
         plt.title(f"Actor Header Clustering for {model_name} on {domain_display}")
         plot_dir = artifacts_dir / 'plots'
         plot_dir.mkdir(exist_ok=True)
-        plot_path = plot_dir / f'{model_name}_{domain_display}_actor_clustering.png'
+        plot_path = plot_dir / f'{model_name}_{clean_domain_display}_actor_clustering.png'
     
     plt.xlabel('UMAP 1')
     plt.ylabel('UMAP 2')
@@ -202,11 +216,11 @@ def run_clustering_experiment(domain: str, model_name: str, artifacts_dir: Path,
 
     df = pd.read_parquet(emb_path)
     
-    # Load and process the manually curated nested canonical proposals.
-    canonical_path = artifacts_dir / f"canonical_proposals_{domain}.json"
+    # Load and process the human-curated canonical sets file
+    domain_artifact = domain.split('/')[-1].lower()  # 'cleaned/Movie' -> 'movie'
+    canonical_path = artifacts_dir / f"canonical_sets_{domain_artifact}.json"
     if not canonical_path.exists():
-        logging.error(f"Manually curated canonical file not found: {canonical_path}")
-        logging.error("Please ensure you have a curated nested JSON for your domain.")
+        logging.error(f"Canonical sets file not found at {canonical_path}. Please ensure the curated canonical sets file exists.")
         return
     with open(canonical_path, 'r') as f:
         nested_map = json.load(f)
@@ -256,10 +270,12 @@ def run_clustering_experiment(domain: str, model_name: str, artifacts_dir: Path,
     logging.info(f"Clustering Results for {model_name} on {domain}: {results}")
     
     # Save results with appropriate naming for ablation models
+    # Sanitize domain name to avoid path issues (replace / with _)
+    clean_domain = domain.replace('/', '_').replace('\\', '_').replace(':', '_')
     if ablation_mode:
-        output_path = artifacts_dir / f'results_clustering_ablation_{model_name}_{domain}.csv'
+        output_path = artifacts_dir / f'results_clustering_ablation_{model_name}_{clean_domain}.csv'
     else:
-        output_path = artifacts_dir / f'results_clustering_{model_name}_{domain}.csv'
+        output_path = artifacts_dir / f'results_clustering_{model_name}_{clean_domain}.csv'
     
     pd.DataFrame([results]).to_csv(output_path, index=False)
     logging.info(f"Saved clustering results to {output_path}")
@@ -290,14 +306,26 @@ def run_clustering_experiment(domain: str, model_name: str, artifacts_dir: Path,
     labels_to_plot = df.loc[top_5_mask, 'canonical']
 
     fig, ax = plt.subplots(figsize=(7, 5))
-    sns.scatterplot(
-        x=embedding_to_plot[:, 0],
-        y=embedding_to_plot[:, 1],
-        hue=labels_to_plot,
-        ax=ax,
-        legend='full'
-    )
+    
+    # Create scatter plot with different colors for each canonical group
+    unique_labels = labels_to_plot.unique()
+    colors = plt.cm.tab10(np.linspace(0, 1, len(unique_labels)))
+    
+    for i, label in enumerate(unique_labels):
+        mask = labels_to_plot == label
+        ax.scatter(
+            embedding_to_plot[mask, 0],
+            embedding_to_plot[mask, 1],
+            c=colors[i],
+            label=label,
+            s=50,
+            alpha=0.7
+        )
+    
+    ax.legend(loc='best')
     domain_display = domain.replace('Quarter_', '').replace('_top100_cleaned', '')
+    # Sanitize domain_display for use in filenames
+    clean_domain_display = domain_display.replace('/', '_').replace('\\', '_').replace(':', '_')
     
     # Create appropriate title and filename based on mode
     if ablation_mode:
@@ -306,12 +334,12 @@ def run_clustering_experiment(domain: str, model_name: str, artifacts_dir: Path,
         plot_dir.mkdir(parents=True, exist_ok=True)
         # Clean up model name for filename (remove special characters)
         clean_model_name = model_name.replace('/', '_').replace('\\', '_').replace(':', '_')
-        plot_path = plot_dir / f'ablation_{clean_model_name}_{domain_display}_umap_top5.png'
+        plot_path = plot_dir / f'ablation_{clean_model_name}_{clean_domain_display}_umap_top5.png'
     else:
         plt.title(f"UMAP of Top 5 Canonicals for {model_name} on {domain_display}")
         plot_dir = artifacts_dir / 'plots'
         plot_dir.mkdir(exist_ok=True)
-        plot_path = plot_dir / f'{model_name}_{domain_display}_umap_top5.png'
+        plot_path = plot_dir / f'{model_name}_{clean_domain_display}_umap_top5.png'
     
     plt.savefig(plot_path)
     logging.info(f"Saved UMAP plot of top 5 canonicals to {plot_path}")
@@ -324,7 +352,7 @@ def run_clustering_experiment(domain: str, model_name: str, artifacts_dir: Path,
 def main():
     parser = argparse.ArgumentParser(description="Run lexical consistency experiments.")
     parser.add_argument('--artifacts_dir', type=Path, default='artifacts/lexvar', help="Directory to save artifacts.")
-    parser.add_argument('--domains', type=str, nargs='+', default=['Quarter_Movie_top100_cleaned', 'Quarter_Product_top100_cleaned'], help="List of domains to process.")
+    parser.add_argument('--domains', type=str, nargs='+', default=['cleaned/Movie', 'cleaned/Product'], help="List of domains to process.")
     parser.add_argument('--models', type=str, nargs='+', default=['bert', 'tapas', 'haetae', 'navi'], help="Models to run.")
     parser.add_argument('--ablation_mode', action='store_true', help="Enable ablation mode for complex model names.")
     parser.add_argument('--ablation_models', type=str, nargs='+', help="List of ablation model names to run (only used when --ablation_mode is set).")

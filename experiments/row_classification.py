@@ -6,14 +6,17 @@ import pandas as pd
 import os
 import argparse
 import gc
+import glob
 from datetime import datetime
 from experiments.experiment_utils import (
     load_data, 
     run_row_classification,
+    run_row_classification_tabpfn,
+    extract_raw_features,
     get_cls_embedding,
-    get_meanpooled_embedding,
-    get_meanpooled_segment_embedding
+    get_meanpooled_embedding
 )
+from skrub import TableVectorizer, TextEncoder
 
 # Model imports
 from transformers import BertForMaskedLM, BertTokenizer, TapasForMaskedLM
@@ -32,7 +35,6 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
 from dataset.dataset import NaviDataset, BertDataset, TapasDataset
-from dataset.preprocess import clean_table_data
 from baselines.haetae.dataset import JSONDataset
 from collections import Counter, defaultdict
 
@@ -42,79 +44,34 @@ config = BertConfig.from_pretrained('bert-base-uncased')
 tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
 
 
-def clean_table_data_preserve_targets(json_data, target_columns, tokenizer_name="bert-base-uncased", 
-                                     max_tokens=500, max_indexed_fields=3, max_tokens_per_field=20):
+def verify_target_columns_present(data, target_columns):
     """
-    Clean table data while preserving target columns.
+    Verify that target columns are present in the data.
+    Data is already cleaned in preprocess.py with token budget considered.
+    CLS data is filtered to only include rows with valid target columns.
     """
-    from dataset.preprocess import handle_indexed_fields, truncate_long_fields, select_fields_for_tokenization, estimate_token_count
-    
-    tokenizer = BertTokenizer.from_pretrained(tokenizer_name)
     processed_data = []
+    missing_targets = 0
     
-    print("🔄 Preprocessing table data while preserving target columns...")
-    
-    for table_id, table_dict in json_data:
-        # Step 1: Handle indexed fields
-        processed_table = handle_indexed_fields(table_dict, max_indexed_fields)
+    for row_dict in data:
+        # Verify all target columns are present
+        all_present = all(target_col in row_dict for target_col in target_columns)
         
-        # Step 2: Truncate long text fields
-        processed_table = truncate_long_fields(processed_table, max_tokens_per_field, tokenizer)
+        if not all_present:
+            missing_targets += 1
+            # Skip rows missing target columns (shouldn't happen if CLS data is properly filtered)
+            continue
         
-        # Step 3: Select fields that fit in token limit, but preserve target columns
-        processed_table = select_fields_for_tokenization_preserve_targets(
-            processed_table, tokenizer, max_tokens, target_columns
-        )
-        
-        processed_data.append((table_id, processed_table))
+        processed_data.append(row_dict)
         
         if len(processed_data) % 1000 == 0:
-            print(f"   Processed {len(processed_data)} instances...")
+            print(f"   Verified {len(processed_data)} instances...")
     
-    print(f"✅ Preprocessing complete. Processed {len(processed_data)} instances.")
+    if missing_targets > 0:
+        print(f"⚠️  Warning: {missing_targets} instances missing target columns (skipped)")
+    
+    print(f"✅ Verification complete. {len(processed_data)} instances with target columns.")
     return processed_data
-
-
-def select_fields_for_tokenization_preserve_targets(table_dict, tokenizer, max_tokens=480, target_columns=None):
-    """Select fields that will fit within token limit while preserving target columns."""
-    if target_columns is None:
-        target_columns = []
-    
-    selected_fields = {}
-    current_tokens = 0
-    
-    # First, always include target columns
-    for target_col in target_columns:
-        if target_col in table_dict:
-            selected_fields[target_col] = table_dict[target_col]
-            current_tokens += estimate_token_count(target_col, table_dict[target_col], tokenizer)
-    
-    # Then select other fields by priority (shorter fields first)
-    remaining_fields = {k: v for k, v in table_dict.items() if k not in target_columns}
-    field_items = list(remaining_fields.items())
-    field_items.sort(key=lambda x: len(str(x[1])))
-    
-    for field_name, field_value in field_items:
-        estimated_tokens = estimate_token_count(field_name, field_value, tokenizer)
-        
-        if current_tokens + estimated_tokens <= max_tokens:
-            selected_fields[field_name] = field_value
-            current_tokens += estimated_tokens
-        else:
-            break  # Stop when we would exceed limit
-    
-    return selected_fields
-
-
-def estimate_token_count(field_name, field_value, tokenizer):
-    """Estimate token count for a field."""
-    if field_value is None:
-        return 0
-    
-    # Include field name in token count
-    full_text = f"{field_name} : {field_value}"
-    tokens = tokenizer.tokenize(str(full_text))
-    return len(tokens)
 
 
 def remove_target_column(row, target_col):
@@ -162,7 +119,10 @@ def run_cls_classification(dataset, target_col, model, model_name, domain, ml_mo
     y = np.array(labels)
 
     # Run classification
-    f1 = run_row_classification(X, y, model_type=ml_model)
+    if ml_model == "tabpfn":
+        f1 = run_row_classification_tabpfn(X, y, test_size=0.2)
+    else:
+        f1 = run_row_classification(X, y, model_type=ml_model)
     return f1
 
 def run_repeated_classification(dataset, target_col, model, model_name, domain, ml_model="rf", n_runs=8, embedding_type="cls"):
@@ -195,6 +155,88 @@ def run_repeated_classification(dataset, target_col, model, model_name, domain, 
         'std': std_f1,
         'scores': f1_scores
     }
+
+def run_repeated_classification_raw(X, y, model_type="xgboost", n_runs=5):
+    """
+    Run classification on raw features multiple times and return mean ± std.
+    
+    Args:
+        X: Feature matrix (numpy array)
+        y: Labels (array-like)
+        model_type: Type of model ("xgboost", "tabpfn", "lr", "rf", or "svm")
+        n_runs: Number of runs
+        
+    Returns:
+        dict: Results with mean, std, and scores
+    """
+    f1_scores = []
+    
+    print(f"Running {n_runs} iterations for {model_type.upper()} on raw features...")
+    
+    for run in range(n_runs):
+        print(f"  Run {run + 1}/{n_runs}...", end=" ")
+        
+        # Use different random seeds for each run
+        random.seed(42 + run)
+        np.random.seed(42 + run)
+        
+        if model_type == "tabpfn":
+            f1 = run_row_classification_tabpfn(X, y, test_size=0.2)
+        elif model_type in ["xgboost", "lr", "rf", "svm"]:
+            f1 = run_row_classification(X, y, model_type=model_type, test_size=0.2)
+        else:
+            raise ValueError(f"Unsupported model_type for raw features: {model_type}")
+        
+        f1_scores.append(f1)
+        print(f"F1: {f1:.4f}")
+    
+    # Calculate statistics
+    mean_f1 = np.mean(f1_scores)
+    std_f1 = np.std(f1_scores)
+    
+    print(f"\n  Results: {mean_f1:.4f} ± {std_f1:.4f}\n\n")
+    
+    return {
+        'mean': mean_f1,
+        'std': std_f1,
+        'scores': f1_scores
+    }
+
+def evaluate_end_to_end_baselines(data, target_col, domain, n_runs=5):
+    """
+    Evaluate end-to-end baselines (XGBoost and TabPFN) on raw features.
+    
+    Args:
+        data: List of JSON dictionaries (rows)
+        target_col: Name of target column
+        domain: Domain name (for logging)
+        n_runs: Number of evaluation runs
+        
+    Returns:
+        dict: Results dictionary with same format as other baselines
+    """
+    print(f"\n{domain} - End-to-End Baselines (Raw Features)")
+    
+    results = {}
+    
+    # Extract raw features
+    print("\nExtracting raw features...")
+    X, y = extract_raw_features(data, target_col)
+    print(f"  Extracted {X.shape[1]} features from {X.shape[0]} samples")
+    
+    # XGBoost on raw features
+    print("\nXGBoost (Raw Features)")
+    results['xgboost_raw'] = {}
+    result = run_repeated_classification_raw(X, y, model_type="xgboost", n_runs=n_runs)
+    results['xgboost_raw'][f"xgboost_{domain}"] = result
+    
+    # TabPFN on raw features
+    print("\nTabPFN (Raw Features)")
+    results['tabpfn_raw'] = {}
+    result = run_repeated_classification_raw(X, y, model_type="tabpfn", n_runs=n_runs)
+    results['tabpfn_raw'][f"tabpfn_{domain}"] = result
+    
+    return results
 
 def group_data_by_table(data):
     """
@@ -246,7 +288,7 @@ def preprocess_wdc_movie(wdc_movie_data):
 
     ## Count combinations that pass the BERT vocab test
     normalized_genres = []
-    for table_id, row_dict in wdc_movie_data:
+    for row_dict in wdc_movie_data:
         genre_str = row_dict.get("genres", "")
         normalized = ", ".join(g.strip().lower() for g in genre_str.split(',')) if isinstance(genre_str, str) else ""
         if is_valid_genre_combo(normalized):
@@ -254,20 +296,20 @@ def preprocess_wdc_movie(wdc_movie_data):
 
     ## Get top 20 valid combinations
     genre_combo_counts = Counter(normalized_genres)
-    top_20_combos = set(combo for combo, _ in genre_combo_counts.most_common(20))
+    top_10_combos = set(combo for combo, _ in genre_combo_counts.most_common(10))
 
     ## Filter the original dataset
     filtered_data = []
-    for table_id, row_dict in wdc_movie_data:
+    for row_dict in wdc_movie_data:
         genre_str = row_dict.get("genres", "")
         normalized = ", ".join(g.strip().lower() for g in genre_str.split(',')) if isinstance(genre_str, str) else ""
-        if normalized in top_20_combos:
-            filtered_data.append((table_id, row_dict))
+        if normalized in top_10_combos:
+            filtered_data.append(row_dict)
 
     wdc_movie_data = filtered_data
 
     ## Step 1: Extract all genre labels
-    labels = [row_dict["genres"] for table_id, row_dict in wdc_movie_data]
+    labels = [row_dict["genres"] for row_dict in wdc_movie_data]
 
     ## Step 2: Count frequencies
     label_counts = Counter(labels)
@@ -277,9 +319,9 @@ def preprocess_wdc_movie(wdc_movie_data):
 
     ## Step 4: Filter the data
     final_data = []
-    for table_id, row_dict in wdc_movie_data:
+    for row_dict in wdc_movie_data:
         if row_dict["genres"] in valid_labels:
-            final_data.append((table_id, row_dict))
+            final_data.append(row_dict)
 
     return final_data
     
@@ -296,11 +338,8 @@ def preprocess_wdc_product(wdc_product_data):
         tokens = tokenizer.tokenize(category.strip().lower())
         return len(tokens) == 1 and not tokens[0].startswith("##")
 
-    # Extract the actual data from tuples (table_id, table_dict)
-    actual_data = [row_dict for table_id, row_dict in wdc_product_data]
-    
     # Convert to DataFrame
-    df = pd.DataFrame(actual_data)
+    df = pd.DataFrame(wdc_product_data)
 
     # Check if 'category' column exists
     if 'category' not in df.columns:
@@ -323,27 +362,27 @@ def preprocess_wdc_product(wdc_product_data):
     }
 
     # Select top 20 English categories
-    top_categories = sorted(english_categories.items(), key=lambda x: x[1], reverse=True)[:20]
+    top_categories = sorted(english_categories.items(), key=lambda x: x[1], reverse=True)[:10]
     top_categories = [cat for cat, _ in top_categories]
 
     # Filter wdc_product_data to include only rows that contain at least one of the top categories
     filtered_wdc_product_data = []
-    for table_id, row_dict in wdc_product_data:
+    for row_dict in wdc_product_data:
         cats = row_dict.get("category", "")
         if isinstance(cats, str):
             split_cats = [cat.strip().lower() for cat in cats.split(',')]
             if any(cat in top_categories for cat in split_cats):
-                filtered_wdc_product_data.append((table_id, row_dict))
+                filtered_wdc_product_data.append(row_dict)
 
     return filtered_wdc_product_data
 
 def stratified_sample(data, label_key, sample_size=1000):
     # Group items by class
     label_to_items = defaultdict(list)
-    for table_id, row_dict in data:
+    for row_dict in data:
         label = row_dict.get(label_key)
         if label:
-            label_to_items[label].append((table_id, row_dict))
+            label_to_items[label].append(row_dict)
 
     num_classes = len(label_to_items)
     per_class = max(1, sample_size // num_classes)
@@ -359,8 +398,53 @@ def stratified_sample(data, label_key, sample_size=1000):
 
     return sampled
 
-def load_baseline_models(tokenizer):
-    """Load baseline models (BERT, HAETAE, TAPAS)"""
+def find_navi_checkpoint(base_dir, domain, seed=None, epoch=2):
+    """
+    Find NAVI model checkpoint path.
+    
+    Args:
+        base_dir: Base models directory (e.g., './models')
+        domain: Domain name (e.g., 'movie', 'product')
+        seed: Training seed (None to find any, or specific seed)
+        epoch: Epoch number (default: 2)
+    
+    Returns:
+        str: Checkpoint path or None if not found
+    """
+    import glob
+    
+    if seed is not None:
+        # Look for specific seed
+        pattern = os.path.join(base_dir, f"navi_{domain}*", f"*seed{seed}*_epoch_{epoch}")
+    else:
+        # Look for any seed (prefer seed42 for backward compatibility)
+        pattern = os.path.join(base_dir, f"navi_{domain}*", f"*seed42*_epoch_{epoch}")
+        matches = glob.glob(pattern)
+        if not matches:
+            # Fallback to any seed
+            pattern = os.path.join(base_dir, f"navi_{domain}*", f"*_epoch_{epoch}")
+    
+    matches = glob.glob(pattern)
+    if matches:
+        # Prefer the most specific match (longest path)
+        matches.sort(key=len, reverse=True)
+        return matches[0]
+    
+    # Fallback to old pattern for backward compatibility
+    old_path = os.path.join(base_dir, f"navi_{domain}", f"epoch_{epoch}")
+    if os.path.exists(old_path):
+        return old_path
+    
+    return None
+
+def load_baseline_models(tokenizer, navi_seed=None):
+    """
+    Load baseline models (BERT, HAETAE, TAPAS, NAVI).
+    
+    Args:
+        tokenizer: Tokenizer instance
+        navi_seed: Training seed for NAVI models (None = use default/seed42)
+    """
     models = {}
     
     # Config
@@ -390,6 +474,39 @@ def load_baseline_models(tokenizer):
     models['tapas_product'] = TapasForMaskedLM.from_pretrained('./models/tapas_product/epoch_2', local_files_only=True)
     models['tapas_product'] = models['tapas_product'].to(device)
     models['tapas_product'].eval()
+
+    # NAVI models - use navi_movie and navi_product_default_3epoch
+    def find_epoch2_path(base_path):
+        """Find epoch_2 directory using glob pattern"""
+        pattern = os.path.join(base_path, "*epoch_2")
+        matches = glob.glob(pattern)
+        if matches:
+            # Prefer the most specific match (longest path)
+            matches.sort(key=len, reverse=True)
+            return matches[0]
+        return None
+    
+    # NAVI Movie - use navi_movie
+    navi_movie_base = './models/navi_movie_tau0p02_0p14_align0p05_ethresh10_90_ga1'
+    navi_movie_path = find_epoch2_path(navi_movie_base)
+    if navi_movie_path:
+        models['navi_movie'] = NaviForMaskedLM(navi_movie_path)
+        models['navi_movie'] = models['navi_movie'].to(device)
+        models['navi_movie'].eval()
+        print(f"✓ Loaded NAVI Movie from: {navi_movie_path}")
+    else:
+        print(f"⚠️  NAVI Movie model not found: {navi_movie_base}/*epoch_2")
+    
+    # NAVI Product - use navi_product_default_3epoch
+    navi_product_base = './models/navi_product_tau0p02_0p14_align0p05_ethresh10_90_ga1'
+    navi_product_path = find_epoch2_path(navi_product_base)
+    if navi_product_path:
+        models['navi_product'] = NaviForMaskedLM(navi_product_path)
+        models['navi_product'] = models['navi_product'].to(device)
+        models['navi_product'].eval()
+        print(f"✓ Loaded NAVI Product from: {navi_product_path}")
+    else:
+        print(f"⚠️  NAVI Product model not found: {navi_product_base}/*epoch_2")
     
     return models
 
@@ -403,7 +520,7 @@ def load_ablation_models(tokenizer):
 
     for domain in domains:
         for ablation in ablation_values:
-            model_path = f'./models/navi_{domain}_{ablation}/epoch_2'
+            model_path = f'./models/navi_{domain}_{ablation}/{ablation}_HVB_seed42_cleaned_tau0.02_0.14_percentile_epoch_2'
             if os.path.exists(model_path):
                 model_name = f'navi_{domain}_{ablation}'
                 models[model_name] = NaviForMaskedLM(model_path, ablation_mode=ablation)
@@ -462,6 +579,228 @@ def load_hyperparam_models_batch(tokenizer, hv_value, domain):
     
     return models
 
+def load_rebuttal_models(tokenizer, domain):
+    """Load rebuttal models: entropy threshold, tau variants, and gradient accumulation variants"""
+    models = {}
+    domain_lower = domain.lower()
+    
+    def find_epoch2_path(base_path):
+        """Find epoch_2 directory using glob pattern"""
+        pattern = os.path.join(base_path, "*epoch_2")
+        matches = glob.glob(pattern)
+        if matches:
+            # Prefer the most specific match (longest path)
+            matches.sort(key=len, reverse=True)
+            return matches[0]
+        return None
+    
+    # Entropy threshold variants
+    ethresh_values = ['10_90', '40_60', '50_50']
+    for ethresh in ethresh_values:
+        base_path = f'./models/navi_{domain_lower}_ethresh{ethresh}'
+        model_path = find_epoch2_path(base_path)
+        if model_path:
+            model_name = f'navi_{domain_lower}_ethresh{ethresh}'
+            models[model_name] = NaviForMaskedLM(model_path)
+            models[model_name] = models[model_name].to(device)
+            models[model_name].eval()
+            print(f"✓ Loaded {model_name} from: {model_path}")
+        else:
+            print(f"⚠️  Model not found: {base_path}/*epoch_2")
+    
+    # Tau variants
+    tau_values = ['0p07_0p07', '0p13_0p13']
+    for tau in tau_values:
+        base_path = f'./models/navi_{domain_lower}_tau{tau}'
+        model_path = find_epoch2_path(base_path)
+        if model_path:
+            model_name = f'navi_{domain_lower}_tau{tau}'
+            models[model_name] = NaviForMaskedLM(model_path)
+            models[model_name] = models[model_name].to(device)
+            models[model_name].eval()
+            print(f"✓ Loaded {model_name} from: {model_path}")
+        else:
+            print(f"⚠️  Model not found: {base_path}/*epoch_2")
+    
+    # Gradient accumulation variants
+    ga_values = ['1', '4']
+    for ga in ga_values:
+        base_path = f'./models/navi_{domain_lower}_ga{ga}'
+        model_path = find_epoch2_path(base_path)
+        if model_path:
+            model_name = f'navi_{domain_lower}_ga{ga}'
+            models[model_name] = NaviForMaskedLM(model_path)
+            models[model_name] = models[model_name].to(device)
+            models[model_name].eval()
+            print(f"✓ Loaded {model_name} from: {model_path}")
+        else:
+            print(f"⚠️  Model not found: {base_path}/*epoch_2")
+    
+    return models
+
+def load_navi_models(tokenizer):
+    """Load standard NAVI models (navi_movie, navi_product)"""
+    models = {}
+    
+    def find_epoch2_path(base_path):
+        """Find epoch_2 directory using glob pattern"""
+        pattern = os.path.join(base_path, "*epoch_2")
+        matches = glob.glob(pattern)
+        if matches:
+            # Prefer the most specific match (longest path)
+            matches.sort(key=len, reverse=True)
+            return matches[0]
+        return None
+    
+    # NAVI Movie
+    base_path = './models/navi_movie_tau0p02_0p14_align0p05_ethresh10_90_ga1'
+    navi_movie_path = find_epoch2_path(base_path)
+    if navi_movie_path:
+        models['navi_movie'] = NaviForMaskedLM(navi_movie_path)
+        models['navi_movie'] = models['navi_movie'].to(device)
+        models['navi_movie'].eval()
+        print(f"✓ Loaded NAVI Movie from: {navi_movie_path}")
+    else:
+        print(f"⚠️  NAVI Movie model not found: {base_path}/*epoch_2")
+    
+    # NAVI Product
+    base_path = './models/navi_product_tau0p02_0p14_align0p05_ethresh10_90_ga1'
+    navi_product_path = find_epoch2_path(base_path)
+    if navi_product_path:
+        models['navi_product'] = NaviForMaskedLM(navi_product_path)
+        models['navi_product'] = models['navi_product'].to(device)
+        models['navi_product'].eval()
+        print(f"✓ Loaded NAVI Product from: {navi_product_path}")
+    else:
+        print(f"⚠️  NAVI Product model not found: {base_path}/*epoch_2")
+    
+    return models
+
+def find_epoch_path(base_path, epoch):
+    """Find epoch directory using glob pattern"""
+    pattern = os.path.join(base_path, f"*epoch_{epoch}")
+    matches = glob.glob(pattern)
+    if matches:
+        # Prefer the most specific match (longest path)
+        matches.sort(key=len, reverse=True)
+        return matches[0]
+    return None
+
+def load_training_variant_model(domain, epoch=None, header_encoder_mode='full'):
+    """
+    Load a training variant model for classification evaluation.
+    
+    Args:
+        domain: Domain name ('movie' or 'product')
+        epoch: Epoch number (1, 2, or 3). If None, uses epoch 2.
+        header_encoder_mode: 'full', 'frozen', or 'partial'
+    
+    Returns:
+        (Model instance, model_name) or (None, None) if not found
+    """
+    domain_lower = domain.lower()
+    
+    # Determine model directory based on variant
+    if header_encoder_mode == 'frozen':
+        base_path = f'./models/navi_{domain_lower}_hefrozen'
+        model_name = f'navi_{domain_lower}_hefrozen'
+    elif header_encoder_mode == 'partial':
+        base_path = f'./models/navi_{domain_lower}_hepartial'
+        model_name = f'navi_{domain_lower}_hepartial'
+    elif epoch is not None and epoch in [1, 3]:
+        # E1 or E3 from default_3epoch
+        base_path = f'./models/navi_{domain_lower}_default_3epoch'
+        model_name = f'navi_{domain_lower}_epoch{epoch}'
+    else:
+        # Default E2
+        base_path = f'./models/navi_{domain_lower}_default_3epoch'
+        model_name = f'navi_{domain_lower}_epoch2'
+    
+    # Find epoch directory
+    target_epoch = epoch if epoch is not None else 2
+    model_path = find_epoch_path(base_path, target_epoch)
+    
+    if model_path:
+        print(f"✓ Loading {model_name} from: {model_path}")
+        model = NaviForMaskedLM(model_path)
+        model = model.to(device)
+        model.eval()
+        return model, model_name
+    else:
+        print(f"⚠️  Model not found: {base_path}/*epoch_{target_epoch}")
+        return None, None
+
+def load_ablation_variants_models(tokenizer, domain):
+    """Load ablation variant models for a specific domain (includes default + all variants)"""
+    models = {}
+    domain_lower = domain.lower()
+    
+    def find_epoch2_path(base_path):
+        """Find epoch_2 directory using glob pattern"""
+        pattern = os.path.join(base_path, "*epoch_2")
+        matches = glob.glob(pattern)
+        if matches:
+            # Prefer the most specific match (longest path)
+            matches.sort(key=len, reverse=True)
+            return matches[0]
+        return None
+    
+    # 1. Default model
+    base_path = f'./models/navi_{domain_lower}'
+    model_path = find_epoch2_path(base_path)
+    if model_path:
+        model_name = f'navi_{domain_lower}'
+        models[model_name] = NaviForMaskedLM(model_path)
+        models[model_name] = models[model_name].to(device)
+        models[model_name].eval()
+        print(f"✓ Loaded {model_name} from: {model_path}")
+    else:
+        print(f"⚠️  Model not found: {base_path}/*epoch_2")
+    
+    # 2-4. Entropy threshold variants
+    ethresh_values = ['10_90', '40_60', '50_50']
+    for ethresh in ethresh_values:
+        base_path = f'./models/navi_{domain_lower}_ethresh{ethresh}'
+        model_path = find_epoch2_path(base_path)
+        if model_path:
+            model_name = f'navi_{domain_lower}_ethresh{ethresh}'
+            models[model_name] = NaviForMaskedLM(model_path)
+            models[model_name] = models[model_name].to(device)
+            models[model_name].eval()
+            print(f"✓ Loaded {model_name} from: {model_path}")
+        else:
+            print(f"⚠️  Model not found: {base_path}/*epoch_2")
+    
+    # 5-6. Temperature variants
+    tau_values = ['0p07_0p07', '0p13_0p13']
+    for tau in tau_values:
+        base_path = f'./models/navi_{domain_lower}_tau{tau}'
+        model_path = find_epoch2_path(base_path)
+        if model_path:
+            model_name = f'navi_{domain_lower}_tau{tau}'
+            models[model_name] = NaviForMaskedLM(model_path)
+            models[model_name] = models[model_name].to(device)
+            models[model_name].eval()
+            print(f"✓ Loaded {model_name} from: {model_path}")
+        else:
+            print(f"⚠️  Model not found: {base_path}/*epoch_2")
+    
+    # 7-8. Gradient accumulation variants (Neg batch size)
+    ga_values = ['1', '4']  # ga1 = batch size 32, ga4 = batch size 128
+    for ga in ga_values:
+        base_path = f'./models/navi_{domain_lower}_ga{ga}'
+        model_path = find_epoch2_path(base_path)
+        if model_path:
+            model_name = f'navi_{domain_lower}_ga{ga}'
+            models[model_name] = NaviForMaskedLM(model_path)
+            models[model_name] = models[model_name].to(device)
+            models[model_name].eval()
+            print(f"✓ Loaded {model_name} from: {model_path}")
+        else:
+            print(f"⚠️  Model not found: {base_path}/*epoch_2")
+    
+    return models
+
 def clear_memory():
     """Clear GPU memory"""
     if torch.cuda.is_available():
@@ -481,7 +820,7 @@ def evaluate_baselines(data, target_col, models, domain, n_runs=5, embedding_typ
     print(f"\n{domain} - Baselines")
     
     results = {}
-    ml_models = ["rf", "xgboost", "lr", "svm"]
+    ml_models = ["xgboost", "lr", "tabpfn"]
     
     # BERT
     print("\nBERT")
@@ -515,15 +854,26 @@ def evaluate_baselines(data, target_col, models, domain, n_runs=5, embedding_typ
             ml_model=ml_model, n_runs=n_runs, embedding_type=embedding_type
         )
         results['haetae'][f"{ml_model}_{domain}"] = result
+
+    # NAVI
+    print("\nNAVI")
+    navi_key = f'navi_{domain.lower()}'
+    results['navi'] = {}
+    for ml_model in ml_models:
+        result = run_repeated_classification(
+            data, target_col, models[navi_key], 'navi', domain, 
+            ml_model=ml_model, n_runs=n_runs, embedding_type=embedding_type
+        )
+        results['navi'][f"{ml_model}_{domain}"] = result
     
     return results
 
-def evaluate_ablations(data, target_col, models, domain, n_runs=8, embedding_type="cls"):
+def evaluate_ablations(data, target_col, models, domain, n_runs=5, embedding_type="cls"):
     """Evaluate ablation models"""
     print(f"\n{domain} - Ablations")
     
     results = {}
-    ml_models = ["rf", "xgboost", "lr", "svm"]
+    ml_models = ["xgboost", "lr"]
     
     # Filter models for this domain
     domain_models = {k: v for k, v in models.items() if f"_{domain.lower()}_" in k}
@@ -585,63 +935,672 @@ def evaluate_hyperparams(data, target_col, tokenizer, domain, n_runs=8, embeddin
     
     return results
 
+def evaluate_navi_embeddings(data, target_col, tokenizer, domain, n_runs=5, embedding_type="cls"):
+    """Evaluate NAVI embeddings approach"""
+    print(f"\n{domain} - NAVI Embeddings")
+    
+    results = {}
+    ml_models = ["xgboost", "lr", "tabpfn"]
+    
+    # Load NAVI model
+    models = load_navi_models(tokenizer)
+    navi_key = f'navi_{domain.lower()}'
+    
+    if navi_key not in models:
+        print(f"⚠️  {navi_key} model not found")
+        return results
+    
+    results['navi_emb'] = {}
+    for ml_model in ml_models:
+        result = run_repeated_classification(
+            data, target_col, models[navi_key], navi_key, domain, 
+            ml_model=ml_model, n_runs=n_runs, embedding_type=embedding_type
+        )
+        results['navi_emb'][f"{ml_model}_{domain.lower()}"] = result
+    
+    del models
+    clear_memory()
+    
+    return results
+
+def evaluate_tablevectorizer(data, target_col, domain, n_runs=5):
+    """Evaluate TableVectorizer features approach"""
+    print(f"\n{domain} - TableVectorizer Features")
+    
+    from experiments.experiment_utils import extract_features_tablevectorizer, run_classification_with_features
+    
+    results = {}
+    ml_models = ["xgboost", "lr", "tabpfn"]
+    
+    # Extract features using TableVectorizer
+    print("Extracting features with TableVectorizer...")
+    X, y = extract_features_tablevectorizer(data, target_col)
+    print(f"  Extracted {X.shape[1]} features from {X.shape[0]} samples")
+    
+    results['tablevectorizer'] = {}
+    for ml_model in ml_models:
+        print(f"\n{ml_model.upper()}")
+        f1_scores = []
+        
+        for run in range(n_runs):
+            print(f"  Run {run + 1}/{n_runs}...", end=" ")
+            random.seed(42 + run)
+            np.random.seed(42 + run)
+            
+            f1 = run_classification_with_features(X, y, model_type=ml_model, test_size=0.2)
+            f1_scores.append(f1)
+            print(f"F1: {f1:.4f}")
+        
+        mean_f1 = np.mean(f1_scores)
+        std_f1 = np.std(f1_scores)
+        print(f"\n  Results: {mean_f1:.4f} ± {std_f1:.4f}\n")
+        
+        results['tablevectorizer'][f"{ml_model}_{domain.lower()}"] = {
+            'mean': mean_f1,
+            'std': std_f1,
+            'scores': f1_scores
+        }
+    
+    return results
+
+def evaluate_textencoder(data, target_col, domain, n_runs=5):
+    """Evaluate TextEncoder features approach"""
+    print(f"\n{domain} - TextEncoder Features")
+    
+    from experiments.experiment_utils import extract_features_textencoder, run_classification_with_features
+    
+    results = {}
+    ml_models = ["xgboost", "tabpfn"]
+    
+    # Extract features using TextEncoder
+    print("Extracting features with TextEncoder...")
+    X, y = extract_features_textencoder(data, target_col)
+    print(f"  Extracted {X.shape[1]} features from {X.shape[0]} samples")
+    
+    results['textencoder'] = {}
+    for ml_model in ml_models:
+        print(f"\n{ml_model.upper()}")
+        f1_scores = []
+        
+        for run in range(n_runs):
+            print(f"  Run {run + 1}/{n_runs}...", end=" ")
+            random.seed(42 + run)
+            np.random.seed(42 + run)
+            
+            f1 = run_classification_with_features(X, y, model_type=ml_model, test_size=0.2)
+            f1_scores.append(f1)
+            print(f"F1: {f1:.4f}")
+        
+        mean_f1 = np.mean(f1_scores)
+        std_f1 = np.std(f1_scores)
+        print(f"\n  Results: {mean_f1:.4f} ± {std_f1:.4f}\n")
+        
+        results['textencoder'][f"{ml_model}_{domain.lower()}"] = {
+            'mean': mean_f1,
+            'std': std_f1,
+            'scores': f1_scores
+        }
+    
+    return results
+
+def evaluate_raw_features(data, target_col, domain, n_runs=5):
+    """Evaluate raw features approach"""
+    print(f"\n{domain} - Raw Features")
+    
+    results = {}
+    ml_models = ["xgboost", "lr", "tabpfn"]
+    
+    # Extract raw features
+    print("Extracting raw features...")
+    X, y = extract_raw_features(data, target_col)
+    print(f"  Extracted {X.shape[1]} features from {X.shape[0]} samples")
+    
+    results['raw'] = {}
+    for ml_model in ml_models:
+        print(f"\n{ml_model.upper()}")
+        result = run_repeated_classification_raw(X, y, model_type=ml_model, n_runs=n_runs)
+        results['raw'][f"{ml_model}_{domain.lower()}"] = result
+    
+    return results
+
+def evaluate_concatenated_navi(data, target_col, tokenizer, domain, n_runs=5, embedding_type="cls"):
+    """Evaluate concatenated NAVI + numerical features approach"""
+    print(f"\n{domain} - Concatenated NAVI + Numerical Features")
+    
+    from experiments.experiment_utils import extract_concatenated_navi_features, run_classification_with_features
+    
+    results = {}
+    ml_models = ["xgboost", "lr", "tabpfn"]
+    
+    # Load NAVI model
+    models = load_navi_models(tokenizer)
+    navi_key = f'navi_{domain.lower()}'
+    
+    if navi_key not in models:
+        print(f"⚠️  {navi_key} model not found")
+        return results
+    
+    # Prepare dataset without target column
+    preprocessed_dataset = [remove_target_column(row, target_col) for row in data]
+    dataset_X = NaviDataset(preprocessed_dataset)
+    
+    # Extract concatenated features
+    print("Extracting concatenated NAVI + numerical features...")
+    X, y = extract_concatenated_navi_features(data, target_col, models[navi_key], dataset_X)
+    print(f"  Extracted {X.shape[1]} features from {X.shape[0]} samples (768 NAVI + {X.shape[1] - 768} numerical)")
+    
+    results['navi_concat'] = {}
+    for ml_model in ml_models:
+        print(f"\n{ml_model.upper()}")
+        f1_scores = []
+        
+        for run in range(n_runs):
+            print(f"  Run {run + 1}/{n_runs}...", end=" ")
+            random.seed(42 + run)
+            np.random.seed(42 + run)
+            
+            f1 = run_classification_with_features(X, y, model_type=ml_model, test_size=0.2)
+            f1_scores.append(f1)
+            print(f"F1: {f1:.4f}")
+        
+        mean_f1 = np.mean(f1_scores)
+        std_f1 = np.std(f1_scores)
+        print(f"\n  Results: {mean_f1:.4f} ± {std_f1:.4f}\n")
+        
+        results['navi_concat'][f"{ml_model}_{domain.lower()}"] = {
+            'mean': mean_f1,
+            'std': std_f1,
+            'scores': f1_scores
+        }
+    
+    del models
+    clear_memory()
+    
+    return results
+
+def evaluate_rebuttal(data, target_col, tokenizer, domain, n_runs=5, embedding_type="cls"):
+    """Evaluate rebuttal models (entropy threshold, tau variants, gradient accumulation)"""
+    print(f"\n{domain} - Rebuttal Models")
+    
+    results = {}
+    ml_models = ["xgboost", "lr", "tabpfn"]
+    
+    # # Load rebuttal models
+    # models = load_navi_models(tokenizer)
+    
+    # # Filter models for this domain
+    # domain_models = {k: v for k, v in models.items() if f"_{domain.lower()}_" in k}
+
+    # for model_name, model in domain_models.items():
+    #     print(f"\n{model_name}")
+    #     results[model_name] = {}
+    #     for ml_model in ml_models:
+    #         result = run_repeated_classification(
+    #             data, target_col, model, model_name, domain, 
+    #             ml_model=ml_model, n_runs=n_runs, embedding_type=embedding_type
+    #         )
+    #         results[model_name][f"{ml_model}_{domain.lower()}"] = result
+    
+    # # Clear memory
+    # del models
+    # clear_memory()
+    
+    # Now evaluate all 5 baseline approaches
+    print(f"\n{'='*80}")
+    print(f"Evaluating 5 Classification Approaches")
+    print(f"{'='*80}\n")
+    
+    # # 1. NAVI embeddings
+    # navi_results = evaluate_navi_embeddings(data, target_col, tokenizer, domain, n_runs=n_runs, embedding_type=embedding_type)
+    # results.update(navi_results)
+    
+    # # 3. TextEncoder features
+    # textencoder_results = evaluate_textencoder(data, target_col, domain, n_runs=n_runs)
+    # results.update(textencoder_results)
+    
+    # 4. Raw features
+    raw_results = evaluate_raw_features(data, target_col, domain, n_runs=n_runs)
+    results.update(raw_results)
+    
+    # 5. Concatenated NAVI + numerical features
+    concat_results = evaluate_concatenated_navi(data, target_col, tokenizer, domain, n_runs=n_runs, embedding_type=embedding_type)
+    results.update(concat_results)
+
+    # 2. TableVectorizer features
+    tablevectorizer_results = evaluate_tablevectorizer(data, target_col, domain, n_runs=n_runs)
+    results.update(tablevectorizer_results)
+    
+    return results
+
+def evaluate_navi(data, target_col, tokenizer, domain, n_runs=5, embedding_type="cls"):
+    """Evaluate standard NAVI models (navi_movie, navi_product)"""
+    print(f"\n{domain} - NAVI Models")
+    
+    results = {}
+    ml_models = ["rf", "xgboost", "lr", "svm"]
+    
+    # Load NAVI models
+    models = load_navi_models(tokenizer)
+    
+    # Get the model for this domain
+    navi_key = f'navi_{domain.lower()}'
+    if navi_key in models:
+        print(f"\n{navi_key}")
+        results['navi'] = {}
+        for ml_model in ml_models:
+            result = run_repeated_classification(
+                data, target_col, models[navi_key], navi_key, domain, 
+                ml_model=ml_model, n_runs=n_runs, embedding_type=embedding_type
+            )
+            results['navi'][f"{ml_model}_{domain.lower()}"] = result
+    else:
+        print(f"⚠️  {navi_key} model not found")
+    
+    return results
+
+def load_tau_align_ethresh_models(tokenizer, domain):
+    """Load tau/align/ethresh variant models for a specific domain"""
+    models = {}
+    domain_lower = domain.lower()
+    
+    def find_epoch2_path(base_path):
+        """Find epoch_2 directory using glob pattern"""
+        pattern = os.path.join(base_path, "*epoch_2")
+        matches = glob.glob(pattern)
+        if matches:
+            # Prefer the most specific match (longest path)
+            matches.sort(key=len, reverse=True)
+            return matches[0]
+        return None
+    
+    # Define all model variants based on log files
+    # Format: (tau, align, ga) where ga can be None or a string like '1'
+    variants = [
+        ('0p01_0p1', '0p1', None),
+        ('0p01_0p14', '0p1', None),
+        ('0p01_0p14', '0p1', '1'),
+        ('0p01_0p14', '0p05', None),
+        ('0p01_0p14', '0p05', '1'),
+        ('0p02_0p14', '0p1', None),
+        ('0p02_0p14', '0p05', None),
+        ('0p02_0p14', '0p05', '1'),
+        ('0p02_0p14', '1p0', None),
+        ('0p03_0p25', '0p1', None),
+        ('0p05_0p1', '0p1', None),
+    ]
+    
+    ethresh = '10_90'
+    
+    for tau, align, ga in variants:
+        # Build base path
+        if ga is not None:
+            base_path = f'./models/navi_{domain_lower}_tau{tau}_align{align}_ethresh{ethresh}_ga{ga}'
+            model_name = f'navi_{domain_lower}_tau{tau}_align{align}_ethresh{ethresh}_ga{ga}'
+        else:
+            base_path = f'./models/navi_{domain_lower}_tau{tau}_align{align}_ethresh{ethresh}'
+            model_name = f'navi_{domain_lower}_tau{tau}_align{align}_ethresh{ethresh}'
+        
+        model_path = find_epoch2_path(base_path)
+        if model_path:
+            models[model_name] = NaviForMaskedLM(model_path)
+            models[model_name] = models[model_name].to(device)
+            models[model_name].eval()
+            print(f"✓ Loaded {model_name} from: {model_path}")
+        else:
+            print(f"⚠️  Model not found: {base_path}/*epoch_2")
+    
+    return models
+
+def evaluate_ablation_variants(data, target_col, tokenizer, domain, n_runs=5, embedding_type="cls", ml_model="xgboost"):
+    """Evaluate ablation variants (entropy threshold, temperature, gradient accumulation)"""
+    print(f"\n{domain} - Ablation Variants")
+    
+    results = {}
+    
+    # Load all ablation variant models
+    models = load_ablation_variants_models(tokenizer, domain)
+    
+    # Evaluate each model
+    for model_name, model in models.items():
+        print(f"\n{model_name}")
+        result = run_repeated_classification(
+            data, target_col, model, model_name, domain, 
+            ml_model=ml_model, n_runs=n_runs, embedding_type=embedding_type
+        )
+        results[model_name] = {
+            f"{ml_model}_{domain.lower()}": result
+        }
+    
+    # Clear memory
+    del models
+    clear_memory()
+    
+    return results
+
+def evaluate_tau_align_ethresh(data, target_col, tokenizer, domain, n_runs=5, embedding_type="cls", ml_model="xgboost"):
+    """Evaluate tau/align/ethresh variant models"""
+    print(f"\n{domain} - Tau/Align/Ethresh Variants")
+    
+    results = {}
+    ml_models = ["xgboost", "lr"]
+    
+    # Load tau/align/ethresh models
+    models = load_tau_align_ethresh_models(tokenizer, domain)
+    
+    # Evaluate each model
+    for model_name, model in models.items():
+        for ml_model in ml_models:
+            print(f"\n{model_name}")
+            result = run_repeated_classification(
+                data, target_col, model, model_name, domain, 
+                ml_model=ml_model, n_runs=n_runs, embedding_type=embedding_type
+            )
+            results[model_name] = {
+                f"{ml_model}_{domain.lower()}": result
+            }
+    
+    # Clear memory
+    del models
+    clear_memory()
+    
+    return results
+
+def load_hyperparam_sensitivity_models(tokenizer, domain):
+    """Load hyperparameter sensitivity models based on log file entries"""
+    models = {}
+    domain_lower = domain.lower()
+    
+    def find_epoch2_path(base_path):
+        """Find epoch_2 directory using glob pattern"""
+        pattern = os.path.join(base_path, "*epoch_2")
+        matches = glob.glob(pattern)
+        if matches:
+            matches.sort(key=len, reverse=True)
+            return matches[0]
+        return None
+    
+    # Alignment Weight Variants
+    align_values = ['0p01', '0p25', '1p25']
+    for align in align_values:
+        base_path = f'./models/navi_{domain_lower}_align{align}'
+        model_path = find_epoch2_path(base_path)
+        if model_path:
+            model_name = f'navi_{domain_lower}_align{align}'
+            models[model_name] = NaviForMaskedLM(model_path)
+            models[model_name] = models[model_name].to(device)
+            models[model_name].eval()
+            print(f"✓ Loaded {model_name} from: {model_path}")
+        else:
+            print(f"⚠️  Model not found: {base_path}/*epoch_2")
+    
+    # HV Weight & Value Ratio Variants
+    hv_vr_combinations = [
+        ('0p8', '0p25'), ('0p8', '0p75'),
+        ('0p4', '0p25'), ('0p4', '0p5'), ('0p4', '0p75')
+    ]
+    for hv, vr in hv_vr_combinations:
+        base_path = f'./models/navi_{domain_lower}_hv{hv}_vr{vr}'
+        model_path = find_epoch2_path(base_path)
+        if model_path:
+            model_name = f'navi_{domain_lower}_hv{hv}_vr{vr}'
+            models[model_name] = NaviForMaskedLM(model_path)
+            models[model_name] = models[model_name].to(device)
+            models[model_name].eval()
+            print(f"✓ Loaded {model_name} from: {model_path}")
+        else:
+            print(f"⚠️  Model not found: {base_path}/*epoch_2")
+    
+    # Entropy Threshold Variants
+    ethresh_values = ['25_75', '40_60', '50_50']
+    for ethresh in ethresh_values:
+        base_path = f'./models/navi_{domain_lower}_ethresh{ethresh}'
+        model_path = find_epoch2_path(base_path)
+        if model_path:
+            model_name = f'navi_{domain_lower}_ethresh{ethresh}'
+            models[model_name] = NaviForMaskedLM(model_path)
+            models[model_name] = models[model_name].to(device)
+            models[model_name].eval()
+            print(f"✓ Loaded {model_name} from: {model_path}")
+        else:
+            print(f"⚠️  Model not found: {base_path}/*epoch_2")
+    
+    # Temperature Variants
+    tau_values = ['0p02_0p02', '0p14_0p14']
+    for tau in tau_values:
+        base_path = f'./models/navi_{domain_lower}_tau{tau}'
+        model_path = find_epoch2_path(base_path)
+        if model_path:
+            model_name = f'navi_{domain_lower}_tau{tau}'
+            models[model_name] = NaviForMaskedLM(model_path)
+            models[model_name] = models[model_name].to(device)
+            models[model_name].eval()
+            print(f"✓ Loaded {model_name} from: {model_path}")
+        else:
+            print(f"⚠️  Model not found: {base_path}/*epoch_2")
+    
+    # Negative Set Size Steps Variants
+    ga_values = ['2', '4']
+    for ga in ga_values:
+        base_path = f'./models/navi_{domain_lower}_ga{ga}'
+        model_path = find_epoch2_path(base_path)
+        if model_path:
+            model_name = f'navi_{domain_lower}_ga{ga}'
+            models[model_name] = NaviForMaskedLM(model_path)
+            models[model_name] = models[model_name].to(device)
+            models[model_name].eval()
+            print(f"✓ Loaded {model_name} from: {model_path}")
+        else:
+            print(f"⚠️  Model not found: {base_path}/*epoch_2")
+    
+    return models
+
+def evaluate_hyperparam_sensitivity(data, target_col, tokenizer, domain, n_runs=5, embedding_type="cls"):
+    """Evaluate hyperparameter sensitivity analysis - only XGBoost and LR for classification"""
+    print(f"\n{domain} - Hyperparameter Sensitivity Analysis")
+    
+    results = {}
+    # Only XGBoost and LR as requested
+    ml_models = ["xgboost", "lr"]
+    
+    # Load all hyperparameter sensitivity models
+    models = load_hyperparam_sensitivity_models(tokenizer, domain)
+    
+    # Evaluate each model
+    for model_name, model in models.items():
+        print(f"\n{model_name}")
+        results[model_name] = {}
+        for ml_model in ml_models:
+            result = run_repeated_classification(
+                data, target_col, model, model_name, domain,
+                ml_model=ml_model, n_runs=n_runs, embedding_type=embedding_type
+            )
+            results[model_name][f"{ml_model}_{domain.lower()}"] = result
+    
+    # Clear memory
+    del models
+    clear_memory()
+    
+    return results
+
+def evaluate_training_variants(data, target_col, tokenizer, domain, n_runs=5, embedding_type="cls", ml_model="xgboost"):
+    """Evaluate training variants (E1, E2, E3, Header Encoder variants) for classification"""
+    print(f"\n{domain} - Training Variants")
+    
+    results = {}
+    domain_lower = domain.lower()
+    
+    # Variants to evaluate
+    variants = [
+        ('Default (E2)', None, 'full'),
+        ('E1', 1, 'full'),
+        ('E3', 3, 'full'),
+        ('Header Enc Frozen', None, 'frozen'),
+        ('Header Enc Partial', None, 'partial'),
+    ]
+    
+    for variant_name, epoch, header_mode in variants:
+        print(f"\n{'='*60}")
+        print(f"Evaluating: {variant_name}")
+        print(f"{'='*60}")
+        
+        # Load model
+        model, model_name = load_training_variant_model(domain_lower, epoch=epoch, header_encoder_mode=header_mode)
+        if model is None:
+            print(f"⚠️  Skipping {variant_name} - model not found")
+            continue
+        
+        # Evaluate
+        result = run_repeated_classification(
+            data, target_col, model, variant_name, domain, 
+            ml_model=ml_model, n_runs=n_runs, embedding_type=embedding_type
+        )
+        results[variant_name] = {
+            f"{ml_model}_{domain_lower}": result
+        }
+        
+        # Clear memory
+        del model
+        clear_memory()
+    
+    return results
+
+def evaluate_with_seed_variance(data, target_col, tokenizer, domain, seeds=[0, 1, 2], 
+                                n_runs=5, embedding_type="cls"):
+    """
+    Evaluate models across multiple training seeds and aggregate results.
+    
+    Args:
+        data: Dataset
+        target_col: Target column name
+        tokenizer: Tokenizer
+        domain: Domain name
+        seeds: List of training seeds to evaluate
+        n_runs: Number of evaluation runs per seed (for train/test split variance)
+        embedding_type: Embedding type
+    
+    Returns:
+        dict: Aggregated results across seeds
+    """
+    print(f"\n{'='*80}")
+    print(f"Evaluating seed variance for {domain} domain")
+    print(f"Training seeds: {seeds}")
+    print(f"Evaluation runs per seed: {n_runs}")
+    print(f"{'='*80}\n")
+    
+    all_seed_results = {}
+    ml_models = ["rf", "xgboost", "lr", "svm"]
+    
+    for seed in seeds:
+        print(f"\n{'='*60}")
+        print(f"Evaluating seed {seed}")
+        print(f"{'='*60}\n")
+        
+        # Load models with this seed
+        models = load_baseline_models(tokenizer, navi_seed=seed)
+        
+        if 'navi_movie' not in models and 'navi_product' not in models:
+            print(f"⚠️  Skipping seed {seed} - NAVI model not found")
+            continue
+        
+        # Run experiments for this seed
+        seed_results = {}
+        domain_key = domain.lower()
+        navi_key = f'navi_{domain_key}'
+        
+        if navi_key in models:
+            seed_results['navi'] = {}
+            for ml_model in ml_models:
+                result = run_repeated_classification(
+                    data, target_col, models[navi_key], navi_key, domain, 
+                    ml_model=ml_model, n_runs=n_runs, embedding_type=embedding_type
+                )
+                seed_results['navi'][f"{ml_model}_{domain_key}"] = result
+        
+        all_seed_results[seed] = seed_results
+        
+        # Clear memory
+        del models
+        clear_memory()
+    
+    # Aggregate across seeds
+    print(f"\n{'='*80}")
+    print("Aggregating results across seeds...")
+    print(f"{'='*80}\n")
+    
+    aggregated = {}
+    for model_type in ['navi']:
+        aggregated[model_type] = {}
+        for ml_model in ml_models:
+            metric_key = f"{ml_model}_{domain_key}"
+            seed_values = []
+            
+            for seed, seed_results in all_seed_results.items():
+                if model_type in seed_results and metric_key in seed_results[model_type]:
+                    mean_f1 = seed_results[model_type][metric_key].get('mean')
+                    if mean_f1 is not None:
+                        seed_values.append(mean_f1)
+            
+            if seed_values:
+                aggregated[model_type][metric_key] = {
+                    'mean': np.mean(seed_values),
+                    'std': np.std(seed_values),
+                    'min': np.min(seed_values),
+                    'max': np.max(seed_values),
+                    'values': seed_values,
+                    'num_seeds': len(seed_values)
+                }
+                print(f"{model_type} {ml_model}: {aggregated[model_type][metric_key]['mean']:.4f} ± {aggregated[model_type][metric_key]['std']:.4f} (across {len(seed_values)} seeds)")
+    
+    return aggregated, all_seed_results
+
 def main():
     parser = argparse.ArgumentParser(description='Run row classification experiments')
-    parser.add_argument('--model', choices=['baselines', 'ablations', 'hyperparams'], 
+    parser.add_argument('--model', choices=['baselines', 'ablations', 'hyperparams', 'seed_variance', 'rebuttal', 'navi', 'ablation_variants', 'training_variants', 'tau_align_ethresh', 'hyperparam_sensitivity'], 
                        required=True, help='Type of models to evaluate')
     parser.add_argument('--domain', choices=['Movie', 'Product'], 
                        required=True, help='Domain to evaluate on')
     parser.add_argument("--embedding_type", type=str, default="cls", choices=["cls", "mean"], 
                        help="Type of embedding to use")
+    parser.add_argument("--seeds", type=int, nargs='+', default=[0, 1, 2],
+                       help="Training seeds for seed variance analysis (only used with --model seed_variance)")
     
     args = parser.parse_args()
     
     print(f"Evaluating {args.model} models on {args.domain} domain")
     
-    # Load classification datasets
-    wdc_product_data = load_data("data/WDC_product_for_cls.jsonl")
-    wdc_movie_data = load_data("data/wd_WDC_movie_for_cls.jsonl")
-    
-    grouped_wdc_product_data = group_data_by_table(wdc_product_data)
-    grouped_wdc_movie_data = group_data_by_table(wdc_movie_data)
-
-    wdc_product_data = []
-    wdc_movie_data = []
-
-    for idx, table in grouped_wdc_product_data:
-        for row in table:
-            wdc_product_data.append((idx, row))
-    for idx, table in grouped_wdc_movie_data:
-        for row in table:
-            wdc_movie_data.append((idx, row))
-
-    # Clean data while preserving target columns
-    print("Cleaning product data...")
-    wdc_product_data = clean_table_data_preserve_targets(wdc_product_data, target_columns=['category'])
-    print("Cleaning movie data...")
-    wdc_movie_data = clean_table_data_preserve_targets(wdc_movie_data, target_columns=['genres'])
-
-    # Preprocess WDC data
-    wdc_movie_data = preprocess_wdc_movie(wdc_movie_data)
-    wdc_product_data = preprocess_wdc_product(wdc_product_data)
-
-    wdc_movie_data = stratified_sample(wdc_movie_data, "genres")
-    wdc_product_data = stratified_sample(wdc_product_data, "category")
-
-    wdc_movie_data = [row for idx, row in wdc_movie_data]
-    wdc_product_data = [row for idx, row in wdc_product_data]
-
-    print(f"WDC Movie data: {len(wdc_movie_data)}")
-    print(f"WDC Product data: {len(wdc_product_data)}")
-
-    print_class_distribution(wdc_movie_data, "genres", "WDC Movie")
-    print_class_distribution(wdc_product_data, "category", "WDC Product")
-
-    # Prepare data for the specified domain
+    # Load and process data for the specified domain only
     if args.domain == 'Product':
+        # Load Product classification dataset
+        wdc_product_data = load_data("data/cleaned/Product/test/WDC_product_for_cls.jsonl")
+        
+        # Verify target columns are present (data already cleaned in preprocess.py)
+        print("Verifying target columns in product data...")
+        wdc_product_data = verify_target_columns_present(wdc_product_data, target_columns=['category'])
+        
+        # Preprocess WDC data
+        wdc_product_data = preprocess_wdc_product(wdc_product_data)
+        wdc_product_data = stratified_sample(wdc_product_data, "category")
+        
+        print(f"WDC Product data: {len(wdc_product_data)}")
+        print_class_distribution(wdc_product_data, "category", "WDC Product")
+        
         data = wdc_product_data
         target_col = 'category'
     else:  # Movie
+        # Load Movie classification dataset
+        wdc_movie_data = load_data("data/cleaned/Movie/test/WDC_movie_for_cls.jsonl")
+        
+        # Verify target columns are present (data already cleaned in preprocess.py)
+        print("Verifying target columns in movie data...")
+        wdc_movie_data = verify_target_columns_present(wdc_movie_data, target_columns=['genres'])
+        
+        # Preprocess WDC data
+        wdc_movie_data = preprocess_wdc_movie(wdc_movie_data)
+        wdc_movie_data = stratified_sample(wdc_movie_data, "genres")
+        
+        print(f"WDC Movie data: {len(wdc_movie_data)}")
+        print_class_distribution(wdc_movie_data, "genres", "WDC Movie")
+        
         data = wdc_movie_data
         target_col = 'genres'
 
@@ -650,16 +1609,51 @@ def main():
         models = load_baseline_models(tokenizer)
         results = evaluate_baselines(data, target_col, models, args.domain.lower(), embedding_type=args.embedding_type)
         
+        # # Add end-to-end baselines (XGBoost and TabPFN on raw features)
+        # e2e_results = evaluate_end_to_end_baselines(data, target_col, args.domain.lower(), n_runs=5)
+        # results.update(e2e_results)
+        
     elif args.model == 'ablations':
         models = load_ablation_models(tokenizer)
         results = evaluate_ablations(data, target_col, models, args.domain.lower(), embedding_type=args.embedding_type)
         
     elif args.model == 'hyperparams':
         results = evaluate_hyperparams(data, target_col, tokenizer, args.domain, embedding_type=args.embedding_type)
+    
+    elif args.model == 'seed_variance':
+        aggregated, all_seed_results = evaluate_with_seed_variance(
+            data, target_col, tokenizer, args.domain, seeds=args.seeds, 
+            embedding_type=args.embedding_type
+        )
+        results = {
+            'aggregated': aggregated,
+            'per_seed': all_seed_results
+        }
+    
+    elif args.model == 'rebuttal':
+        results = evaluate_rebuttal(data, target_col, tokenizer, args.domain, embedding_type=args.embedding_type)
+    
+    elif args.model == 'navi':
+        results = evaluate_navi(data, target_col, tokenizer, args.domain, embedding_type=args.embedding_type)
+    
+    elif args.model == 'ablation_variants':
+        results = evaluate_ablation_variants(data, target_col, tokenizer, args.domain, embedding_type=args.embedding_type)
+    
+    elif args.model == 'training_variants':
+        results = evaluate_training_variants(data, target_col, tokenizer, args.domain, embedding_type=args.embedding_type)
+    
+    elif args.model == 'tau_align_ethresh':
+        results = evaluate_tau_align_ethresh(data, target_col, tokenizer, args.domain, embedding_type=args.embedding_type)
+    
+    elif args.model == 'hyperparam_sensitivity':
+        results = evaluate_hyperparam_sensitivity(data, target_col, tokenizer, args.domain, embedding_type=args.embedding_type)
 
     # Save results to JSON file with timestamp
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    results_file = f"experiments/logs/row_classification_{args.model}_{args.domain.lower()}_{timestamp}.json"
+    if args.model == 'seed_variance':
+        results_file = f"experiments/logs/row_classification_{args.model}_{args.domain.lower()}_seeds{'_'.join(map(str, args.seeds))}_{timestamp}.json"
+    else:
+        results_file = f"experiments/logs/row_classification_{args.model}_{args.domain.lower()}_{timestamp}.json"
     os.makedirs(os.path.dirname(results_file), exist_ok=True)
     
     # Convert numpy types to Python types for JSON serialization
@@ -693,9 +1687,17 @@ def main():
     print("SUMMARY RESULTS (Mean ± Std)")
     print("="*80)
     
+    # For hyperparam_sensitivity, only print XGBoost and LR results
+    if args.model == 'hyperparam_sensitivity':
+        print("\nNote: Only showing XGBoost and LR results as requested")
+    
     for model_name, model_results in results.items():
         print(f"\n{model_name}:")
         for task_name, task_result in model_results.items():
+            # For hyperparam_sensitivity, only print xgboost and lr
+            if args.model == 'hyperparam_sensitivity':
+                if 'xgboost' not in task_name and 'lr' not in task_name:
+                    continue
             mean_val = task_result['mean']
             std_val = task_result['std']
             print(f"  {task_name}: {mean_val:.4f} ± {std_val:.4f}")

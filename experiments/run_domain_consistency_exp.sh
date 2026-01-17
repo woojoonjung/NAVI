@@ -11,7 +11,7 @@ set -e  # Exit on any error
 # Configuration
 DATA_DIR="data"
 ARTIFACTS_DIR="artifacts/lexvar"
-DOMAINS=("Movie_top100" "Product_top100")
+DOMAINS=("cleaned/Movie" "cleaned/Product")
 MODELS=("bert" "tapas" "haetae" "navi")
 
 # Colors for output
@@ -48,55 +48,21 @@ check_directories() {
     fi
     
     for domain in "${DOMAINS[@]}"; do
-        if [ ! -d "$DATA_DIR/$domain" ]; then
-            error "Domain directory '$DATA_DIR/$domain' not found!"
+        domain_path="$DATA_DIR/$domain"
+        validation_path="$domain_path/validation"
+        
+        if [ ! -d "$domain_path" ]; then
+            error "Domain directory '$domain_path' not found!"
+            exit 1
+        fi
+        
+        if [ ! -d "$validation_path" ]; then
+            error "Validation directory '$validation_path' not found!"
             exit 1
         fi
     done
     
     success "All required directories found"
-}
-
-# Check if cleaned datasets exist, if not run preprocessing
-check_cleaned_datasets() {
-    log "Checking for cleaned datasets..."
-    
-    local missing_datasets=()
-    
-    for domain in "${DOMAINS[@]}"; do
-        local cleaned_dir="$DATA_DIR/Quarter_${domain}_cleaned"
-        if [ ! -d "$cleaned_dir" ]; then
-            missing_datasets+=("$cleaned_dir")
-        fi
-    done
-    
-    if [ ${#missing_datasets[@]} -gt 0 ]; then
-        warning "Cleaned datasets not found: ${missing_datasets[*]}"
-        log "Running preprocessing pipeline to create cleaned datasets..."
-        
-        # Run preprocessing
-        python dataset/preprocess.py \
-            --movie_dir "$DATA_DIR/Movie_top100" \
-            --product_dir "$DATA_DIR/Product_top100" \
-            --product_max_rows 5000 \
-            --heldout_start 450 \
-            --heldout_end 459
-        
-        # Create symlinks for Quarter_* directories (expected by experiments)
-        for domain in "${DOMAINS[@]}"; do
-            local cleaned_dir="$DATA_DIR/Quarter_${domain}_cleaned"
-            local source_dir="$DATA_DIR/${domain}_cleaned"
-            
-            if [ -d "$source_dir" ] && [ ! -d "$cleaned_dir" ]; then
-                log "Creating symlink: $cleaned_dir -> $source_dir"
-                ln -sf "../${domain}_cleaned" "$cleaned_dir"
-            fi
-        done
-        
-        success "Preprocessing completed and symlinks created"
-    else
-        success "Cleaned datasets found"
-    fi
 }
 
 # Check if canonical sets exist
@@ -106,7 +72,10 @@ check_canonical_sets() {
     local missing_canonical=()
     
     for domain in "${DOMAINS[@]}"; do
-        local canonical_file="$ARTIFACTS_DIR/canonical_final_Quarter_${domain}_cleaned.json"
+        # Extract domain name from path (e.g., 'cleaned/Movie' -> 'movie')
+        domain_name=$(echo "$domain" | awk -F'/' '{print $NF}' | tr '[:upper:]' '[:lower:]')
+        canonical_file="$ARTIFACTS_DIR/canonical_sets_${domain_name}.json"
+        
         if [ ! -f "$canonical_file" ]; then
             missing_canonical+=("$canonical_file")
         fi
@@ -114,13 +83,9 @@ check_canonical_sets() {
     
     if [ ${#missing_canonical[@]} -gt 0 ]; then
         error "Canonical sets not found: ${missing_canonical[*]}"
-        error "Please run the canonical sets generation first:"
-        error "python experiments/domain_consistency_get_canonical_sets.py \\"
-        error "    --data_dir $DATA_DIR \\"
-        error "    --artifacts_dir $ARTIFACTS_DIR \\"
-        error "    --domains ${DOMAINS[@]/#/Quarter_} \\"
-        error "    --cluster_method semantic \\"
-        error "    --run_curation"
+        error "Please ensure the curated canonical sets files exist in $ARTIFACTS_DIR:"
+        error "  - canonical_sets_movie.json"
+        error "  - canonical_sets_product.json"
         exit 1
     else
         success "Canonical sets found"
@@ -134,7 +99,7 @@ get_header_embeddings() {
     python experiments/domain_consistency_get_header_embeddings.py \
         --data_dir "$DATA_DIR" \
         --artifacts_dir "$ARTIFACTS_DIR" \
-        --domains "${DOMAINS[@]/#/Quarter_}" \
+        --domains "${DOMAINS[@]}" \
         --models "${MODELS[@]}"
     
     if [ $? -eq 0 ]; then
@@ -151,7 +116,7 @@ run_domain_consistency_exp() {
     
     python experiments/domain_consistency_exp.py \
         --artifacts_dir "$ARTIFACTS_DIR" \
-        --domains "${DOMAINS[@]/#/Quarter_}" \
+        --domains "${DOMAINS[@]}" \
         --models "${MODELS[@]}"
     
     if [ $? -eq 0 ]; then
@@ -177,18 +142,20 @@ main() {
                 echo "  --help, -h         Show this help message"
                 echo ""
                 echo "This script runs the domain consistency experiment pipeline:"
-                echo "1. Check and prepare cleaned datasets"
-                echo "2. Check for existing canonical sets"
+                echo "1. Check required directories (data/cleaned/{domain}/validation)"
+                echo "2. Check for existing canonical sets files"
                 echo "3. Get header embeddings for all models"
                 echo "4. Run domain consistency experiment"
                 echo ""
-                echo "Note: Canonical sets must be generated separately first using:"
-                echo "python experiments/domain_consistency_get_canonical_sets.py \\"
-                echo "    --data_dir data \\"
-                echo "    --artifacts_dir artifacts/lexvar \\"
-                echo "    --domains Quarter_Movie_top100_cleaned Quarter_Product_top100_cleaned \\"
-                echo "    --cluster_method semantic \\"
-                echo "    --run_curation"
+                echo "Configuration:"
+                echo "  Data directory: $DATA_DIR"
+                echo "  Artifacts directory: $ARTIFACTS_DIR"
+                echo "  Domains: ${DOMAINS[*]}"
+                echo "  Models: ${MODELS[*]}"
+                echo ""
+                echo "Note: Canonical sets must exist in $ARTIFACTS_DIR:"
+                echo "  - canonical_sets_movie.json"
+                echo "  - canonical_sets_product.json"
                 exit 0
                 ;;
             *)
@@ -204,7 +171,6 @@ main() {
     
     # Run pipeline steps
     check_directories
-    check_cleaned_datasets
     check_canonical_sets
     get_header_embeddings
     run_domain_consistency_exp
@@ -212,7 +178,10 @@ main() {
     log "=============================================="
     success "Domain Consistency Experiment Pipeline completed successfully!"
     log "Results saved in: $ARTIFACTS_DIR"
-    log "Check the generated files for quantitative results"
+    log "Check the following for results:"
+    log "  - CSV files: results_clustering_{model}_{domain}.csv"
+    log "  - Plots: plots/{model}_{domain}_umap_top5.png"
+    log "  - Actor plots (Movie only): plots/{model}_movie_actor_clustering.png"
 }
 
 # Run main function with all arguments

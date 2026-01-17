@@ -10,6 +10,8 @@ from tqdm import tqdm
 from scipy.stats import kendalltau
 from scipy.spatial import procrustes
 from sklearn.metrics.pairwise import cosine_similarity
+import glob
+import os
 
 # Model imports
 from transformers import BertForMaskedLM, BertTokenizer, TapasForMaskedLM, TapasConfig, BertConfig
@@ -31,20 +33,34 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
 
+def find_epoch_path(base_path, epoch):
+    """Find epoch directory using glob pattern"""
+    pattern = os.path.join(base_path, f"*epoch_{epoch}")
+    matches = glob.glob(pattern)
+    if matches:
+        # Prefer the most specific match (longest path)
+        matches.sort(key=len, reverse=True)
+        return matches[0]
+    # Fallback to direct path
+    direct_path = os.path.join(base_path, f"epoch_{epoch}")
+    if os.path.exists(direct_path):
+        return direct_path
+    return None
+
 def load_model(model_name, domain, config_suffix=""):
     """Loads a single model with optional config suffix for ablation variants."""
     config = BertConfig.from_pretrained('bert-base-uncased')
     
-    # Base model path mapping
+    # Base model path mapping - fixed to use correct model directory names
     model_path_map = {
-        'bert': f'./models/bert_quarter_{domain}/epoch_2',
-        'tapas': f'./models/tapas_quarter_{domain}/epoch_2',
-        'haetae': f'./models/haetae_quarter_{domain}/epoch_2',
-        'navi': f'./models/navi_{domain}/epoch_2'
+        'bert': f'./models/bert_{domain}/epoch_2',
+        'tapas': f'./models/tapas_{domain}/epoch_2',
+        'haetae': f'./models/haetae_{domain}/epoch_2',
+        'navi': f'./models/navi_{domain}'  # Will use find_epoch_path for NAVI
     }
     
-    # Add ablation variants if config_suffix is provided
-    if config_suffix:
+    # Add ablation variants if config_suffix is provided OR if model_name is an ablation model
+    if config_suffix or model_name in ['woSSI', 'woMSM', 'woESA', 'full']:
         # Map domain to the format used in ablation model names
         domain_mapping = {
             'movie': 'movie',
@@ -54,16 +70,27 @@ def load_model(model_name, domain, config_suffix=""):
         
         # Add ablation variants using the new naming convention from pretrain_navi.sh
         ablation_variants = {
-            'woSSI': f'./models/navi_{domain_lower}_woSSI/epoch_2',
-            'woMSM': f'./models/navi_{domain_lower}_woMSM/epoch_2',
-            'woESA': f'./models/navi_{domain_lower}_woESA/epoch_2',
-            'full': f'./models/navi_{domain_lower}/epoch_2'  # Default NAVI model
+            'woSSI': f'./models/navi_{domain_lower}_woSSI',  # Will use find_epoch_path
+            'woMSM': f'./models/navi_{domain_lower}_woMSM',  # Will use find_epoch_path
+            'woESA': f'./models/navi_{domain_lower}_woESA',  # Will use find_epoch_path
+            'full': f'./models/navi_{domain_lower}'  # Will use find_epoch_path
         }
         model_path_map.update(ablation_variants)
     
     model_path = model_path_map.get(model_name)
 
-    if not model_path or not Path(model_path).exists():
+    if not model_path:
+        logging.error(f"Unknown model name: {model_name}")
+        return None
+
+    # For NAVI models, use glob pattern to find the actual epoch directory
+    if model_name in ['navi', 'woSSI', 'woMSM', 'woESA', 'full']:
+        epoch_path = find_epoch_path(model_path, epoch=2)
+        if not epoch_path:
+            logging.error(f"NAVI model epoch_2 not found for {model_name} in domain {domain} at base path: {model_path}")
+            return None
+        model_path = epoch_path
+    elif not Path(model_path).exists():
         logging.error(f"Model path not found for {model_name} in domain {domain} with config {config_suffix}: {model_path}")
         return None
 
@@ -75,7 +102,7 @@ def load_model(model_name, domain, config_suffix=""):
     elif model_name == 'haetae':
         model = HAETAE(config, tokenizer, model_path)
     elif model_name in ['navi', 'woSSI', 'woMSM', 'woESA', 'full']:
-        if model_name != 'navi':
+        if model_name != 'navi' and model_name != 'full':
             model = NaviForMaskedLM(model_path, ablation_mode=model_name)
         else:
             model = NaviForMaskedLM(model_path)
@@ -145,15 +172,15 @@ def run_structural_consistency_experiment(domain: str, model_name: str, artifact
                                         n_permutations: int = 5, n_samples: int = 100, config_suffix: str = ""):
     logging.info(f"Starting Structural Consistency experiment for domain='{domain}', model='{model_name}', config='{config_suffix}'")
     
-    # Extract domain name for model loading
-    domain_name = domain.split('_')[1].lower()
+    # Extract domain name for model loading (e.g., 'cleaned/Movie' -> 'movie')
+    domain_name = domain.split('/')[-1].lower()
     model = load_model(model_name, domain_name, config_suffix)
     if model is None: 
         return
 
     all_rows = []
-    domain_path = data_dir / domain
-    for file_path in tqdm(domain_path.glob('*.jsonl'), desc="Loading data"):
+    domain_path = data_dir / domain / 'validation'
+    for file_path in tqdm(domain_path.glob('*.json'), desc="Loading data"):
         table_id = file_path.stem
         if file_path.stat().st_size == 0: continue
         with open(file_path, 'r') as f:
@@ -224,7 +251,7 @@ def run_structural_consistency_experiment(domain: str, model_name: str, artifact
     results_df['embedding_type_mapped'] = results_df['embedding_type'].map(embedding_type_mapping)
     
     # Extract domain name (product or movie)
-    domain_short = domain.split('_')[1].lower()  # 'movie' or 'product'
+    domain_short = domain.split('/')[-1].lower()  # 'movie' or 'product'
     
     # Compute aggregated results
     aggregated_results = []
@@ -261,10 +288,10 @@ def main():
     parser = argparse.ArgumentParser(description="Run structural consistency experiments.")
     parser.add_argument('--data_dir', type=Path, default='data', help="Directory containing the domain data.")
     parser.add_argument('--artifacts_dir', type=Path, default='artifacts/structvar', help="Directory to save artifacts.")
-    parser.add_argument('--domains', type=str, nargs='+', default=['Quarter_Movie_top100_cleaned', 'Quarter_Product_top100_cleaned'], help="List of domains to process.")
+    parser.add_argument('--domains', type=str, nargs='+', default=['cleaned/Movie', 'cleaned/Product'], help="List of domains to process.")
     parser.add_argument('--models', type=str, nargs='+', default=['bert', 'tapas', 'haetae', 'navi'], help="Models to run.")
     parser.add_argument('--ablation_models', type=str, nargs='+', default=['woSSI', 'woMSM', 'woESA', 'full'], help="Ablation models to run.")
-    parser.add_argument('--config_suffix', type=str, default='hv0p4_align4p0_vr0p5', help="Configuration suffix for ablation models.")
+    parser.add_argument('--config_suffix', type=str, default='', help="Configuration suffix for ablation models.")
     parser.add_argument('--n_samples', type=int, default=100, help="Number of rows to sample for the experiment.")
     parser.add_argument('--n_permutations', type=int, default=5, help="Number of permutations per row.")
     parser.add_argument('--run_ablation', action='store_true', help="Run ablation experiments with the specified config.")

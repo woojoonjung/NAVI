@@ -9,7 +9,12 @@ from torch.utils.data import DataLoader
 import json
 import pickle
 import random
+import numpy as np
 from datetime import datetime
+import time
+import matplotlib.pyplot as plt
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend
 from transformers import TapasForMaskedLM, AutoTokenizer, get_scheduler
 from transformers.utils.logging import set_verbosity_info, enable_propagation
 from transformers import DataCollatorForLanguageModeling
@@ -68,7 +73,7 @@ def create_combined_dataset(jsonl_files, max_length, cache_dir=".cache_tokenized
 
 def load_or_tokenize(jsonl_file, max_length, cache_dir=".cache_tokenized"):
     os.makedirs(cache_dir, exist_ok=True)
-    cache_file = os.path.join(cache_dir, os.path.basename(jsonl_file).replace(".jsonl", ".pkl"))
+    cache_file = os.path.join(cache_dir, os.path.basename(jsonl_file).replace(".json", ".pkl"))
 
     if os.path.exists(cache_file):
         try:
@@ -90,7 +95,7 @@ def parse_args():
     parser.add_argument("--pretrained_model", type=str, default="google/tapas-base-masklm", help="Pretrained model name or path")
     parser.add_argument("--max_length", type=int, default=512, help="Maximum sequence length")
     parser.add_argument("--batch_size", type=int, default=32, help="Batch size")
-    parser.add_argument("--gradient_accumulation_steps", type=int, default=2, help="Number of gradient accumulation steps")
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=1, help="Number of gradient accumulation steps")
     parser.add_argument("--tables_per_batch", type=int, default=4, help="Number of tables to process simultaneously")
     parser.add_argument("--num_epochs", type=int, default=2, help="Number of training epochs")
     parser.add_argument("--learning_rate", type=float, default=3e-5, help="Learning rate")
@@ -101,6 +106,8 @@ def parse_args():
     parser.add_argument("--mlm_probability", type=float, default=0.15, help="Probability for masking tokens in MLM")
     parser.add_argument("--hv_weight", type=float, default=1.0, help="Weight for HV masking in HVB strategy")
     parser.add_argument("--max_tokens_to_mask", type=int, default=80, help="Maximum tokens to mask per batch")
+    parser.add_argument("--validation_dir", type=str, default=None, help="Path to validation data directory (optional)")
+    parser.add_argument("--validation_sample_ratio", type=float, default=0.2, help="Ratio of validation data to use (1.0 = full dataset, default: 0.2)")
     return parser.parse_args()
 
 class LossLogger:
@@ -111,11 +118,15 @@ class LossLogger:
         self.metrics = {
             'training_info': {
                 'start_time': datetime.now().isoformat(),
-                'epochs': []
+                'epochs': [],
+                'validation': [],
+                'compute_metrics': {},
+                'dataset_stats': {}
             },
             'steps': [] 
         }
         self.metrics_file = os.path.join(output_dir, "training_metrics_tapas.json")
+        self.plot_file = os.path.join(output_dir, "learning_curve_tapas.png")
 
     def log_epoch(self, epoch, epoch_metrics):
         epoch_data = {
@@ -134,6 +145,131 @@ class LossLogger:
         }
         self.metrics['steps'].append(step_data)
         self.save_metrics()
+    
+    def log_validation_step(self, step, validation_metrics):
+        """Log validation metrics at a specific training step."""
+        val_data = {
+            'step': step,
+            'metrics': validation_metrics,
+            'timestamp': datetime.now().isoformat()
+        }
+        # Store step-based validations separately
+        if 'validation_steps' not in self.metrics['training_info']:
+            self.metrics['training_info']['validation_steps'] = []
+        self.metrics['training_info']['validation_steps'].append(val_data)
+        self.save_metrics()
+    
+    def log_compute_metrics(self, compute_metrics):
+        """Log compute metrics like timing, throughput, etc."""
+        self.metrics['training_info']['compute_metrics'].update(compute_metrics)
+        self.save_metrics()
+    
+    def plot_learning_curve(self, smoothing=0.1):
+        """Plot learning curve with optional smoothing, including validation losses."""
+        if not self.metrics['steps']:
+            print("⚠️ No step data available for plotting")
+            return
+        
+        # Extract training data
+        steps = [s['step'] for s in self.metrics['steps']]
+        total_losses = [s['metrics'].get('total_loss', 0) for s in self.metrics['steps']]
+        mlm_losses = [s['metrics'].get('mlm_loss', 0) for s in self.metrics['steps'] if s['metrics'].get('mlm_loss') is not None]
+        
+        # Extract step-based validation data (every 1000 steps)
+        validation_steps_data = self.metrics['training_info'].get('validation_steps', [])
+        
+        # Extract validation data
+        val_step_data = {
+            'steps': [],
+            'total_loss': [],
+            'mlm_loss': []
+        }
+        
+        for v in validation_steps_data:
+            step = v['step']
+            metrics = v['metrics']
+            val_step_data['steps'].append(step)
+            val_step_data['total_loss'].append(metrics.get('total_loss', 0))
+            if metrics.get('mlm_loss') is not None:
+                val_step_data['mlm_loss'].append((step, metrics['mlm_loss']))
+        
+        # Unpack paired data for mlm loss
+        val_step_mlm_steps = [x[0] for x in val_step_data['mlm_loss']]
+        val_step_mlm_vals = [x[1] for x in val_step_data['mlm_loss']]
+        
+        # Apply exponential moving average smoothing
+        def smooth(values, alpha):
+            if not values:
+                return values
+            smoothed = [values[0]]
+            for v in values[1:]:
+                smoothed.append(alpha * v + (1 - alpha) * smoothed[-1])
+            return smoothed
+        
+        if smoothing > 0:
+            total_losses = smooth(total_losses, 1 - smoothing)
+            if mlm_losses:
+                mlm_losses = smooth(mlm_losses, 1 - smoothing)
+        
+        # Create figure with subplots
+        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+        axes = axes.flatten()
+        
+        # Plot 1: Total Loss
+        plot_idx = 0
+        axes[plot_idx].plot(steps, total_losses, label='Train Total Loss', linewidth=2, color='blue')
+        if val_step_data['steps']:
+            axes[plot_idx].plot(val_step_data['steps'], val_step_data['total_loss'], 
+                              label='Val Total Loss (Step)', linewidth=2, linestyle='--', 
+                              marker='o', markersize=6, color='red', zorder=5)
+        axes[plot_idx].set_xlabel('Training Step')
+        axes[plot_idx].set_ylabel('Loss')
+        axes[plot_idx].set_title('Total Loss')
+        axes[plot_idx].legend()
+        axes[plot_idx].grid(True, alpha=0.3)
+        
+        # Plot 2: MLM Loss
+        plot_idx = 1
+        if mlm_losses:
+            mlm_steps = [s['step'] for s in self.metrics['steps'] if s['metrics'].get('mlm_loss') is not None]
+            axes[plot_idx].plot(mlm_steps, mlm_losses, label='Train MLM Loss', linewidth=2, color='cyan')
+        if val_step_mlm_steps:
+            axes[plot_idx].plot(val_step_mlm_steps, val_step_mlm_vals, label='Val MLM Loss (Step)', 
+                              linewidth=2, linestyle='--', marker='o', markersize=6, color='red', zorder=5)
+        axes[plot_idx].set_xlabel('Training Step')
+        axes[plot_idx].set_ylabel('Loss')
+        axes[plot_idx].set_title('MLM Loss')
+        axes[plot_idx].legend()
+        axes[plot_idx].grid(True, alpha=0.3)
+        
+        # Plot 3: Learning Rate (if available)
+        plot_idx = 2
+        lr_steps = [s['step'] for s in self.metrics['steps'] if s['metrics'].get('learning_rate') is not None]
+        lr_values = [s['metrics'].get('learning_rate') for s in self.metrics['steps'] if s['metrics'].get('learning_rate') is not None]
+        if lr_steps:
+            axes[plot_idx].plot(lr_steps, lr_values, label='Learning Rate', linewidth=2, color='green')
+        axes[plot_idx].set_xlabel('Training Step')
+        axes[plot_idx].set_ylabel('Learning Rate')
+        axes[plot_idx].set_title('Learning Rate Schedule')
+        axes[plot_idx].legend()
+        axes[plot_idx].grid(True, alpha=0.3)
+        
+        # Plot 4: Throughput (if available)
+        plot_idx = 3
+        throughput_steps = [s['step'] for s in self.metrics['steps'] if s['metrics'].get('samples_per_sec') is not None]
+        throughput_values = [s['metrics'].get('samples_per_sec') for s in self.metrics['steps'] if s['metrics'].get('samples_per_sec') is not None]
+        if throughput_steps:
+            axes[plot_idx].plot(throughput_steps, throughput_values, label='Samples/sec', linewidth=2, color='orange')
+        axes[plot_idx].set_xlabel('Training Step')
+        axes[plot_idx].set_ylabel('Samples/sec')
+        axes[plot_idx].set_title('Training Throughput')
+        axes[plot_idx].legend()
+        axes[plot_idx].grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.savefig(self.plot_file, dpi=150, bbox_inches='tight')
+        plt.close()
+        print(f"📊 Learning curve saved to: {self.plot_file}")
 
     def save_metrics(self):
         with open(self.metrics_file, 'w') as f:
@@ -153,6 +289,7 @@ def train_tapas(
     args=None,
     logger=None,
     global_step=0,
+    validation_dir=None,
 ):
     model.train()
 
@@ -160,10 +297,15 @@ def train_tapas(
 
     total_loss = 0.0
     num_batches = 0
+    
+    # Timing tracking
+    epoch_start_time = time.time()
+    step_times = []
 
     optimizer.zero_grad()
 
     for step, batch in enumerate(tqdm(dataloader, desc="Training", leave=False)):
+        step_start_time = time.time()
         input_ids = batch["input_ids"].to(device)
         attention_mask = batch["attention_mask"].to(device)
         token_type_ids = batch.get("token_type_ids", None)
@@ -200,25 +342,184 @@ def train_tapas(
             global_step += 1
 
             if logger and global_step % args.log_steps == 0:
+                step_time = time.time() - step_start_time
+                samples_per_sec = args.batch_size / step_time if step_time > 0 else 0
                 logger.log_step(global_step, {
                     "total_loss": loss.item() * args.gradient_accumulation_steps,
+                    "mlm_loss": loss.item() * args.gradient_accumulation_steps,
                     "learning_rate": scheduler.get_last_lr()[0],
+                    "samples_per_sec": samples_per_sec,
+                    "step_time": step_time
                 })
+            
+            # Run validation every 1000 steps
+            if validation_dir and logger and global_step % 1000 == 0:
+                tokenizer = dataloader.dataset.tokenizer if hasattr(dataloader.dataset, 'tokenizer') else data_collator.tokenizer
+                val_collator = TapasCollator(
+                    tokenizer=tokenizer,
+                    mlm_probability=args.mlm_probability,
+                    stage_config=[('HVB', args.num_epochs)],
+                    hv_weight=args.hv_weight,
+                    token_length_threshold=8,
+                    mask_replace_prob=0.8,
+                    random_replace_prob=0.1,
+                    max_tokens_to_mask=args.max_tokens_to_mask,
+                    value_ratio=0.5
+                )
+                val_metrics = run_validation(
+                    model, validation_dir, device, val_collator, 
+                    args, step_sample_ratio=args.validation_sample_ratio
+                )
+                if val_metrics:
+                    logger.log_validation_step(global_step, val_metrics)
+        
+        step_time = time.time() - step_start_time
+        step_times.append(step_time)
 
-    # Print avg loss info for this epoch
+    # Calculate epoch metrics
+    epoch_end_time = time.time()
+    epoch_duration = epoch_end_time - epoch_start_time
     avg_total_loss = total_loss / num_batches
+    
+    # Calculate throughput
+    total_samples = num_batches * args.batch_size
+    samples_per_sec = total_samples / epoch_duration if epoch_duration > 0 else 0
+    avg_step_time = np.mean(step_times) if step_times else 0
+    
+    # Log epoch metrics
+    epoch_metrics = {
+        "total_loss": float(avg_total_loss),
+        "mlm_loss": float(avg_total_loss),
+        "samples_processed": int(total_samples),
+        "num_batches": int(num_batches),
+        "epoch_duration_seconds": float(epoch_duration),
+        "samples_per_sec": float(samples_per_sec),
+        "avg_step_time": float(avg_step_time)
+    }
+    
+    if logger:
+        logger.log_epoch(epoch, epoch_metrics)
 
     print(f"\n[Epoch {epoch+1}]")
     print(f" Total Loss: {avg_total_loss:.4f}")
+    print(f"⏱️  Epoch Duration: {epoch_duration:.2f}s | Throughput: {samples_per_sec:.2f} samples/sec")
 
     return global_step
+
+def run_validation(model, validation_dir, device, data_collator, args, step_sample_ratio=0.2):
+    """
+    Run validation on validation dataset.
+    Returns validation metrics including losses.
+    
+    Args:
+        step_sample_ratio: Ratio to sample validation data (default: 0.2 for 20%)
+    """
+    if validation_dir is None or not os.path.exists(validation_dir):
+        return None
+    
+    print(f"\n🔍 Running validation (randomly sampling {step_sample_ratio*100:.0f}% of data)...")
+    model.eval()
+    
+    # Load validation files
+    val_files = sorted([
+        os.path.join(validation_dir, f)
+        for f in os.listdir(validation_dir)
+        if f.endswith(".json") or f.endswith(".jsonl")
+    ])
+    
+    if not val_files:
+        print("⚠️ No validation files found")
+        return None
+    
+    # Load validation data - load all data first, then randomly sample
+    val_data = []
+    for val_file in val_files:
+        try:
+            data = load_jsonl(val_file)
+            val_data.extend([(0, row) for row in data])
+        except Exception as e:
+            print(f"⚠️ Error loading {val_file}: {e}")
+            continue
+    
+    # Randomly sample the specified ratio of the total data
+    if val_data:
+        total_samples = len(val_data)
+        num_samples = max(1, int(total_samples * step_sample_ratio))
+        val_data = random.sample(val_data, num_samples)
+        print(f"📊 Randomly sampled {len(val_data)}/{total_samples} validation samples ({step_sample_ratio*100:.0f}% of total)")
+    
+    if not val_data:
+        print("⚠️ No validation data loaded")
+        return None
+    
+    # Create validation dataset
+    json_objects = [item[1] for item in val_data]
+    val_dataset = TapasDataset(json_objects, max_length=args.max_length)
+    
+    val_dataloader = DataLoader(
+        val_dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        collate_fn=data_collator,
+        num_workers=4,
+        pin_memory=True
+    )
+    
+    total_loss = 0.0
+    mlm_loss_total = 0.0
+    num_batches = 0
+    
+    val_start_time = time.time()
+    
+    with torch.no_grad():
+        for batch in tqdm(val_dataloader, desc="Validation", leave=False):
+            input_ids = batch["input_ids"].to(device)
+            attention_mask = batch["attention_mask"].to(device)
+            token_type_ids = batch.get("token_type_ids", None)
+            if token_type_ids is not None:
+                token_type_ids = token_type_ids.to(device)
+            labels = batch["labels"].to(device)
+            
+            # Forward pass
+            outputs = model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                token_type_ids=token_type_ids,
+                labels=labels,
+            )
+            
+            mlm_loss = outputs.loss
+            total_loss += mlm_loss.item()
+            mlm_loss_total += mlm_loss.item()
+            num_batches += 1
+    
+    model.train()
+    
+    val_end_time = time.time()
+    val_duration = val_end_time - val_start_time
+    total_val_samples = num_batches * args.batch_size
+    val_samples_per_sec = total_val_samples / val_duration if val_duration > 0 else 0
+    
+    val_metrics = {
+        'total_loss': float(total_loss / num_batches if num_batches > 0 else 0.0),
+        'mlm_loss': float(mlm_loss_total / num_batches if num_batches > 0 else 0.0),
+        'num_samples': int(total_val_samples),
+        'num_batches': int(num_batches),
+        'duration_seconds': float(val_duration),
+        'samples_per_sec': float(val_samples_per_sec)
+    }
+    
+    print(f"📊 Validation - Total Loss: {val_metrics['total_loss']:.4f}, MLM Loss: {val_metrics['mlm_loss']:.4f}")
+    print(f"⏱️  Validation Duration: {val_duration:.2f}s | Throughput: {val_samples_per_sec:.2f} samples/sec")
+    
+    return val_metrics
 
 def main(args):
     print("🔄 Loading all JSONL files...")
     jsonl_files = sorted([
         os.path.join(args.data_path, f)
         for f in os.listdir(args.data_path)
-        if f.endswith(".jsonl")
+        if f.endswith(".json")
     ])
 
     # Sort files by number of lines (rows) as per flowchart
@@ -234,6 +535,23 @@ def main(args):
     jsonl_files = [f[0] for f in file_sizes]
     
     print(f"📈 Found {len(jsonl_files)} files, sorted by size")
+    
+    # Calculate dataset statistics
+    total_training_rows = sum(s for _, s in file_sizes)
+    file_row_counts = [s for _, s in file_sizes]
+    dataset_stats = {
+        'num_files': len(jsonl_files),
+        'total_training_rows': total_training_rows,
+        'min_rows_per_file': min(file_row_counts) if file_row_counts else 0,
+        'max_rows_per_file': max(file_row_counts) if file_row_counts else 0,
+        'mean_rows_per_file': np.mean(file_row_counts) if file_row_counts else 0,
+        'median_rows_per_file': np.median(file_row_counts) if file_row_counts else 0
+    }
+    
+    print(f"📊 Dataset stats: {total_training_rows:,} total rows | "
+          f"Mean: {dataset_stats['mean_rows_per_file']:.0f} | "
+          f"Min: {dataset_stats['min_rows_per_file']} | "
+          f"Max: {dataset_stats['max_rows_per_file']}")
     
     # Group into groups of 4 tables each (as per flowchart)
     tables_per_group = 4
@@ -294,6 +612,31 @@ def main(args):
     )
     
     logger = LossLogger(args.output_dir)
+    
+    # Log dataset statistics
+    logger.metrics['training_info']['dataset_stats'] = dataset_stats
+    
+    # Get validation dataset stats if available
+    if args.validation_dir and os.path.exists(args.validation_dir):
+        val_files = sorted([
+            os.path.join(args.validation_dir, f)
+            for f in os.listdir(args.validation_dir)
+            if f.endswith(".json") or f.endswith(".jsonl")
+        ])
+        if val_files:
+            with Pool(processes=min(4, os.cpu_count())) as pool:
+                val_file_sizes = pool.map(count_lines, val_files)
+            val_file_sizes = [(f, s) for f, s in val_file_sizes if s > 0]
+            total_val_rows = sum(s for _, s in val_file_sizes)
+            val_row_counts = [s for _, s in val_file_sizes]
+            dataset_stats['num_validation_files'] = len(val_files)
+            dataset_stats['total_validation_rows'] = total_val_rows
+            dataset_stats['min_val_rows_per_file'] = min(val_row_counts) if val_row_counts else 0
+            dataset_stats['max_val_rows_per_file'] = max(val_row_counts) if val_row_counts else 0
+            dataset_stats['mean_val_rows_per_file'] = np.mean(val_row_counts) if val_row_counts else 0
+            print(f"📊 Validation stats: {total_val_rows:,} total rows from {len(val_files)} files")
+    
+    logger.save_metrics()
 
     print("🎯 Starting training...")
     print(f"📊 Total training steps: {total_steps}")
@@ -306,6 +649,7 @@ def main(args):
     print(f" Logging to: {logger.get_metrics_file()}")
 
     global_step = 0
+    training_start_time = time.time()
 
     # Global Epoch Loop (as per flowchart)
     for epoch in range(args.num_epochs):
@@ -361,6 +705,7 @@ def main(args):
                 args=args,
                 logger=logger,
                 global_step=global_step,
+                validation_dir=args.validation_dir,
             )
 
             if torch.cuda.is_available():
@@ -369,6 +714,45 @@ def main(args):
             print(f"✅ Group {group_idx + 1} Complete")
             cnt += 1
 
+    # Calculate total training time and compute metrics
+    training_end_time = time.time()
+    total_training_time = training_end_time - training_start_time
+    total_training_hours = total_training_time / 3600
+    
+    # Calculate effective batch size
+    effective_batch_size = args.batch_size * args.gradient_accumulation_steps
+    if torch.cuda.is_available():
+        num_gpus = torch.cuda.device_count()
+        effective_batch_size *= num_gpus
+    else:
+        num_gpus = 0
+    
+    # Estimate total samples processed
+    total_samples_processed = total_training_rows * args.num_epochs
+    
+    # Log compute metrics (ensure JSON serializable)
+    compute_metrics = {
+        'total_training_time_seconds': float(total_training_time),
+        'total_training_time_hours': float(total_training_hours),
+        'total_training_steps': int(global_step),
+        'total_epochs': int(args.num_epochs),
+        'steps_per_epoch': int(steps_per_epoch),
+        'effective_batch_size': int(effective_batch_size),
+        'batch_size': int(args.batch_size),
+        'gradient_accumulation_steps': int(args.gradient_accumulation_steps),
+        'num_gpus': int(num_gpus),
+        'total_samples_processed': int(total_samples_processed),
+        'end_time': datetime.now().isoformat()
+    }
+    
+    logger.log_compute_metrics(compute_metrics)
+    
+    print(f"\n⏱️  Total Training Time: {total_training_hours:.2f} hours ({total_training_time:.2f} seconds)")
+    print(f"📊 Total Steps: {global_step} | Effective Batch Size: {effective_batch_size}")
+    
+    # Plot learning curve at the end
+    logger.plot_learning_curve(smoothing=0.1)
+    
     save_path = os.path.join(args.output_dir, f"epoch_{args.num_epochs}")
     os.makedirs(save_path, exist_ok=True)
     model.save_pretrained(save_path)

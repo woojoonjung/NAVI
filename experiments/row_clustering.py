@@ -5,6 +5,7 @@ import random
 import os
 import argparse
 import gc
+import glob
 from datetime import datetime
 from collections import Counter
 from pathlib import Path
@@ -17,17 +18,15 @@ from experiments.experiment_utils import (
     load_data, 
     run_row_clustering,
     get_cls_embedding,
-    get_meanpooled_embedding,
-    get_meanpooled_segment_embedding
+    get_meanpooled_embedding
 )
 from row_classification import (
-    clean_table_data_preserve_targets,
+    verify_target_columns_present,
     preprocess_wdc_movie,
     preprocess_wdc_product,
     stratified_sample,
     remove_target_column,
-    print_class_distribution,
-    group_data_by_table
+    print_class_distribution
 )
 
 # Model imports
@@ -87,13 +86,38 @@ def load_baseline_models(tokenizer):
     models['tapas_product'] = models['tapas_product'].to(device)
     models['tapas_product'].eval()
 
-    models['navi_movie'] = NaviForMaskedLM('./models/navi_movie/epoch_2')
-    models['navi_movie'] = models['navi_movie'].to(device)
-    models['navi_movie'].eval()
+    # NAVI models - use navi_movie and navi_product_default_3epoch
+    def find_epoch2_path(base_path):
+        """Find epoch_2 directory using glob pattern"""
+        pattern = os.path.join(base_path, "*epoch_2")
+        matches = glob.glob(pattern)
+        if matches:
+            # Prefer the most specific match (longest path)
+            matches.sort(key=len, reverse=True)
+            return matches[0]
+        return None
     
-    models['navi_product'] = NaviForMaskedLM('./models/navi_product/epoch_2')
-    models['navi_product'] = models['navi_product'].to(device)
-    models['navi_product'].eval()
+    # NAVI Movie - use navi_movie
+    navi_movie_base = './models/navi_movie_tau0p02_0p14_align0p05_ethresh10_90_ga1'
+    navi_movie_path = find_epoch2_path(navi_movie_base)
+    if navi_movie_path:
+        models['navi_movie'] = NaviForMaskedLM(navi_movie_path)
+        models['navi_movie'] = models['navi_movie'].to(device)
+        models['navi_movie'].eval()
+        print(f"✓ Loaded NAVI Movie from: {navi_movie_path}")
+    else:
+        print(f"⚠️  NAVI Movie model not found: {navi_movie_base}/*epoch_2")
+    
+    # NAVI Product - use navi_product_default_3epoch
+    navi_product_base = './models/navi_product_tau0p02_0p14_align0p05_ethresh10_90_ga1'
+    navi_product_path = find_epoch2_path(navi_product_base)
+    if navi_product_path:
+        models['navi_product'] = NaviForMaskedLM(navi_product_path)
+        models['navi_product'] = models['navi_product'].to(device)
+        models['navi_product'].eval()
+        print(f"✓ Loaded NAVI Product from: {navi_product_path}")
+    else:
+        print(f"⚠️  NAVI Product model not found: {navi_product_base}/*epoch_2")
     
     return models
 
@@ -107,7 +131,7 @@ def load_ablation_models(tokenizer):
 
     for domain in domains:
         for ablation in ablation_values:
-            model_path = f'./models/navi_{domain}_{ablation}/epoch_2'
+            model_path = f'./models/navi_{domain}_{ablation}/{ablation}_HVB_seed42_cleaned_tau0.02_0.14_percentile_epoch_2'
             if os.path.exists(model_path):
                 model_name = f'navi_{domain}_{ablation}'
                 models[model_name] = NaviForMaskedLM(model_path, ablation_mode=ablation)
@@ -252,6 +276,59 @@ def evaluate_ablations(data, target_col, models, domain, embedding_type="cls"):
         
     return results
 
+def load_tau_align_ethresh_models(tokenizer, domain):
+    """Load tau/align/ethresh variant models for a specific domain"""
+    models = {}
+    domain_lower = domain.lower()
+    
+    def find_epoch2_path(base_path):
+        """Find epoch_2 directory using glob pattern"""
+        pattern = os.path.join(base_path, "*epoch_2")
+        matches = glob.glob(pattern)
+        if matches:
+            # Prefer the most specific match (longest path)
+            matches.sort(key=len, reverse=True)
+            return matches[0]
+        return None
+    
+    # Define all model variants based on log files
+    # Format: (tau, align, ga) where ga can be None or a string like '1'
+    variants = [
+        ('0p01_0p1', '0p1', None),
+        ('0p01_0p14', '0p1', None),
+        ('0p01_0p14', '0p1', '1'),
+        ('0p01_0p14', '0p05', None),
+        ('0p01_0p14', '0p05', '1'),
+        ('0p02_0p14', '0p1', None),
+        ('0p02_0p14', '0p05', None),
+        ('0p02_0p14', '0p05', '1'),
+        ('0p02_0p14', '1p0', None),
+        ('0p03_0p25', '0p1', None),
+        ('0p05_0p1', '0p1', None),
+    ]
+    
+    ethresh = '10_90'
+    
+    for tau, align, ga in variants:
+        # Build base path
+        if ga is not None:
+            base_path = f'./models/navi_{domain_lower}_tau{tau}_align{align}_ethresh{ethresh}_ga{ga}'
+            model_name = f'navi_{domain_lower}_tau{tau}_align{align}_ethresh{ethresh}_ga{ga}'
+        else:
+            base_path = f'./models/navi_{domain_lower}_tau{tau}_align{align}_ethresh{ethresh}'
+            model_name = f'navi_{domain_lower}_tau{tau}_align{align}_ethresh{ethresh}'
+        
+        model_path = find_epoch2_path(base_path)
+        if model_path:
+            models[model_name] = NaviForMaskedLM(model_path)
+            models[model_name] = models[model_name].to(device)
+            models[model_name].eval()
+            print(f"✓ Loaded {model_name} from: {model_path}")
+        else:
+            print(f"⚠️  Model not found: {base_path}/*epoch_2")
+    
+    return models
+
 def evaluate_hyperparams(data, target_col, tokenizer, domain, embedding_type="cls"):
     """Evaluate hyperparameter variations with memory management"""
     print(f"\n{domain} - Hyperparameter Variations")
@@ -273,6 +350,25 @@ def evaluate_hyperparams(data, target_col, tokenizer, domain, embedding_type="cl
         print(f"\n{model_name}")
         results[model_name] = run_model_clustering(data, target_col, model, model_name, domain, embedding_type)
     del hv0p8_models
+    clear_memory()
+    
+    return results
+
+def evaluate_tau_align_ethresh(data, target_col, tokenizer, domain, embedding_type="cls"):
+    """Evaluate tau/align/ethresh variant models"""
+    print(f"\n{domain} - Tau/Align/Ethresh Variants")
+    results = {}
+    
+    # Load tau/align/ethresh models
+    models = load_tau_align_ethresh_models(tokenizer, domain)
+    
+    # Evaluate each model
+    for model_name, model in models.items():
+        print(f"\n{model_name}")
+        results[model_name] = run_model_clustering(data, target_col, model, model_name, domain, embedding_type)
+    
+    # Clear memory
+    del models
     clear_memory()
     
     return results
@@ -301,7 +397,7 @@ def create_json_safe_results(results):
 
 def main():
     parser = argparse.ArgumentParser(description='Run row clustering experiments')
-    parser.add_argument('--model', choices=['baselines', 'ablations', 'hyperparams'], 
+    parser.add_argument('--model', choices=['baselines', 'ablations', 'hyperparams', 'tau_align_ethresh'], 
                        required=True, help='Type of models to evaluate')
     parser.add_argument('--domain', choices=['Movie', 'Product'], 
                        required=True, help='Domain to evaluate on')
@@ -312,52 +408,43 @@ def main():
     
     print(f"Evaluating {args.model} models on {args.domain} domain for clustering")
     
-    # Load datasets
-    wdc_product_data = load_data("data/WDC_product_for_cls.jsonl")
-    wdc_movie_data = load_data("data/wd_WDC_movie_for_cls.jsonl")
-    
-    grouped_wdc_product_data = group_data_by_table(wdc_product_data)
-    grouped_wdc_movie_data = group_data_by_table(wdc_movie_data)
-
-    wdc_product_data = []
-    wdc_movie_data = []
-
-    for idx, table in grouped_wdc_product_data:
-        for row in table:
-            wdc_product_data.append((idx, row))
-    for idx, table in grouped_wdc_movie_data:
-        for row in table:
-            wdc_movie_data.append((idx, row))
-
-    # Clean data while preserving target columns for label extraction
-    print("Cleaning product data...")
-    wdc_product_data = clean_table_data_preserve_targets(wdc_product_data, target_columns=['category'])
-    print("Cleaning movie data...")
-    wdc_movie_data = clean_table_data_preserve_targets(wdc_movie_data, target_columns=['genres'])
-
-    # Preprocess and filter data to create a manageable set for evaluation
-    wdc_movie_data = preprocess_wdc_movie(wdc_movie_data)
-    wdc_product_data = preprocess_wdc_product(wdc_product_data)
-
-    # Stratified sampling to ensure class representation while keeping dataset size manageable
-    wdc_movie_data = stratified_sample(wdc_movie_data, "genres", sample_size=500)
-    wdc_product_data = stratified_sample(wdc_product_data, "category", sample_size=500)
-
-    # Finalize dataset format
-    wdc_movie_data = [row for idx, row in wdc_movie_data]
-    wdc_product_data = [row for idx, row in wdc_product_data]
-
-    print(f"WDC Movie data sample size: {len(wdc_movie_data)}")
-    print(f"WDC Product data sample size: {len(wdc_product_data)}")
-
-    print_class_distribution(wdc_movie_data, "genres", "WDC Movie")
-    print_class_distribution(wdc_product_data, "category", "WDC Product")
-
-    # Prepare data for the specified domain
+    # Load and process data for the specified domain only
     if args.domain == 'Product':
+        # Load Product classification dataset
+        wdc_product_data = load_data("data/cleaned/Product/test/WDC_product_for_cls.jsonl")
+        
+        # Verify target columns are present (data already cleaned in preprocess.py)
+        print("Verifying target columns in product data...")
+        wdc_product_data = verify_target_columns_present(wdc_product_data, target_columns=['category'])
+        
+        # Preprocess and filter data to create a manageable set for evaluation
+        wdc_product_data = preprocess_wdc_product(wdc_product_data)
+        
+        # Stratified sampling to ensure class representation while keeping dataset size manageable
+        wdc_product_data = stratified_sample(wdc_product_data, "category", sample_size=500)
+        
+        print(f"WDC Product data sample size: {len(wdc_product_data)}")
+        print_class_distribution(wdc_product_data, "category", "WDC Product")
+        
         data = wdc_product_data
         target_col = 'category'
     else:  # Movie
+        # Load Movie classification dataset
+        wdc_movie_data = load_data("data/cleaned/Movie/test/WDC_movie_for_cls.jsonl")
+        
+        # Verify target columns are present (data already cleaned in preprocess.py)
+        print("Verifying target columns in movie data...")
+        wdc_movie_data = verify_target_columns_present(wdc_movie_data, target_columns=['genres'])
+        
+        # Preprocess and filter data to create a manageable set for evaluation
+        wdc_movie_data = preprocess_wdc_movie(wdc_movie_data)
+        
+        # Stratified sampling to ensure class representation while keeping dataset size manageable
+        wdc_movie_data = stratified_sample(wdc_movie_data, "genres", sample_size=500)
+        
+        print(f"WDC Movie data sample size: {len(wdc_movie_data)}")
+        print_class_distribution(wdc_movie_data, "genres", "WDC Movie")
+        
         data = wdc_movie_data
         target_col = 'genres'
 
@@ -372,6 +459,9 @@ def main():
         
     elif args.model == 'hyperparams':
         results = evaluate_hyperparams(data, target_col, tokenizer, args.domain, embedding_type=args.embedding_type)
+    
+    elif args.model == 'tau_align_ethresh':
+        results = evaluate_tau_align_ethresh(data, target_col, tokenizer, args.domain, embedding_type=args.embedding_type)
 
     # Save results to JSON file with timestamp
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

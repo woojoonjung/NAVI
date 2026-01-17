@@ -130,7 +130,9 @@ class NaviDataset(Dataset):
     Dataset class for Navi, consisting of multiple SegmentSets.
     """
     def __init__(self, json_data, tokenizer_name="bert-base-uncased", max_length=512, 
-                 ablation_mode="full", compute_field_entropy=False):
+                 ablation_mode="full", compute_field_entropy=False, 
+                 entropy_threshold_method="quartile", low_threshold_percentile=25, 
+                 high_threshold_percentile=75):
         self.tokenizer = BertTokenizer.from_pretrained(tokenizer_name)
         self.max_length = max_length
         self.ablation_mode = ablation_mode
@@ -147,7 +149,11 @@ class NaviDataset(Dataset):
 
         if compute_field_entropy:
             print("Initializing field entropy analysis...")
-            self.field_analyzer = FieldEntropyAnalyzer()
+            self.field_analyzer = FieldEntropyAnalyzer(
+                entropy_threshold_method=entropy_threshold_method,
+                low_threshold_percentile=low_threshold_percentile,
+                high_threshold_percentile=high_threshold_percentile
+            )
             self.field_analyzer.compute_field_entropy(self)
 
     def get_field_categories(self):
@@ -216,8 +222,23 @@ class NaviDataset(Dataset):
 # -----------------------------
 
 class FieldEntropyAnalyzer:
-    def __init__(self, delta_threshold=1.5):
+    """
+    Analyzes field entropy and categorizes fields as low/high entropy.
+    
+    Args:
+        delta_threshold (float): Delta threshold for entropy analysis (default: 1.5)
+        entropy_threshold_method (str): Method for calculating thresholds. Options:
+            - "quartile": Use Q1 and Q3 quartiles (default, maintains backward compatibility)
+            - "percentile": Use configurable percentiles
+        low_threshold_percentile (int): Low threshold percentile (default: 25, used when method="percentile")
+        high_threshold_percentile (int): High threshold percentile (default: 75, used when method="percentile")
+    """
+    def __init__(self, delta_threshold=1.5, entropy_threshold_method="quartile", 
+                 low_threshold_percentile=25, high_threshold_percentile=75):
         self.delta = delta_threshold
+        self.entropy_threshold_method = entropy_threshold_method
+        self.low_threshold_percentile = low_threshold_percentile
+        self.high_threshold_percentile = high_threshold_percentile
         # Store all metrics on a per-table basis
         self.field_entropy = {} # {table_id: {field: entropy, ...}}
         self.low_entropy_fields = {} # {table_id: set_of_fields}
@@ -297,7 +318,7 @@ class FieldEntropyAnalyzer:
             print("⚠️ No field entropy computed. Call compute_field_entropy() first.")
             return
 
-        print("📊 Categorizing fields for each table using improved thresholds...")
+        print(f"📊 Categorizing fields for each table using {self.entropy_threshold_method} thresholds...")
         for table_id, entropies in self.field_entropy.items():
             self.low_entropy_fields[table_id] = set()
             self.high_entropy_fields[table_id] = set()
@@ -308,12 +329,24 @@ class FieldEntropyAnalyzer:
                 print(f"   - Table {table_id}: Skipped (only {len(entropy_values)} fields).")
                 continue
             
-            # Use quartiles for more stable categorization
-            n = len(entropy_values)
-            q1_idx = max(0, (n) // 4 - 1)
-            q3_idx = min(n - 1, (3 * n) // 4)
-            low_threshold = entropy_values[q1_idx]
-            high_threshold = entropy_values[q3_idx]
+            # Calculate thresholds based on the configured method
+            if self.entropy_threshold_method == "quartile":
+                # Use quartiles for more stable categorization (default behavior)
+                n = len(entropy_values)
+                q1_idx = max(0, (n) // 4 - 1)
+                q3_idx = min(n - 1, (3 * n) // 4)
+                low_threshold = entropy_values[q1_idx]
+                high_threshold = entropy_values[q3_idx]
+            elif self.entropy_threshold_method == "percentile":
+                # Use configurable percentiles
+                n = len(entropy_values)
+                low_idx = max(0, int((self.low_threshold_percentile / 100) * n) - 1)
+                high_idx = min(n - 1, int((self.high_threshold_percentile / 100) * n))
+                low_threshold = entropy_values[low_idx]
+                high_threshold = entropy_values[high_idx]
+            else:
+                raise ValueError(f"Unknown entropy_threshold_method: {self.entropy_threshold_method}. "
+                               f"Supported methods: 'quartile', 'percentile'")
 
             for field_name, entropy in entropies.items():
                 if entropy <= low_threshold:
@@ -332,8 +365,13 @@ class FieldEntropyAnalyzer:
                 max_field = max(entropies.items(), key=lambda x: x[1])[0]
                 self.high_entropy_fields[table_id].add(max_field)
             
-            print(f"   - Table {table_id}: Low={len(self.low_entropy_fields[table_id])}, High={len(self.high_entropy_fields[table_id])} fields.-> Total {len(entropies)} fields.")
+            # Identify mid-entropy fields (not low, not high)
+            mid_entropy_fields = set(entropies.keys()) - self.low_entropy_fields[table_id] - self.high_entropy_fields[table_id]
+            
+            print(f"   - Table {table_id}: Low={len(self.low_entropy_fields[table_id])}, Mid={len(mid_entropy_fields)}, High={len(self.high_entropy_fields[table_id])} fields.-> Total {len(entropies)} fields.")
             print(f"     - Low entropy fields: {self.low_entropy_fields[table_id]}")
+            if mid_entropy_fields:
+                print(f"     - Mid entropy fields: {mid_entropy_fields}")
             print(f"     - High entropy fields: {self.high_entropy_fields[table_id]}")
 
     def get_field_categories(self):
@@ -341,13 +379,19 @@ class FieldEntropyAnalyzer:
         Get the categorized fields for all tables.
         
         Returns:
-            dict: {table_id: {'low_entropy': set, 'high_entropy': set}}
+            dict: {table_id: {'low_entropy': set, 'mid_entropy': set, 'high_entropy': set}}
         """
         all_categories = {}
         for table_id in self.field_entropy.keys():
+            low_set = self.low_entropy_fields.get(table_id, set())
+            high_set = self.high_entropy_fields.get(table_id, set())
+            all_fields = set(self.field_entropy.get(table_id, {}).keys())
+            mid_set = all_fields - low_set - high_set
+            
             all_categories[table_id] = {
-                'low_entropy': self.low_entropy_fields.get(table_id, set()),
-                'high_entropy': self.high_entropy_fields.get(table_id, set()),
+                'low_entropy': low_set,
+                'mid_entropy': mid_set,
+                'high_entropy': high_set,
                 'field_entropy': self.field_entropy.get(table_id, {}).copy()
             }
         return all_categories

@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+from collections import defaultdict
 from config import Config
 
 config = Config()
@@ -318,22 +319,35 @@ class EntropyAwareContrastiveLoss(nn.Module):
         
         return total_loss / max(valid_groups, 1)
     
-    def forward(self, E_univ, H_ctx, V_ctx, header_strings, table_ids, field_categories):
+    def forward(self, E_univ, H_ctx, V_ctx, header_strings, table_ids, field_categories, return_dict=False):
         """
         Simplified forward pass.
+        
+        Args:
+            return_dict: If True, returns dict with individual losses. If False, returns scalar total loss (backward compatible).
         """
         if field_categories is None:
-            return torch.tensor(0.0, device=E_univ.device)
+            zero_tensor = torch.tensor(0.0, device=E_univ.device)
+            if return_dict:
+                return {"total": zero_tensor, "low_entropy": zero_tensor, "high_entropy": zero_tensor}
+            return zero_tensor
         
         total_loss = 0.0
+        low_loss_total = 0.0
+        high_loss_total = 0.0
         valid_tables = 0
         
-        # Process each table
+        # Group rows by table_id first
+        # This is critical: _high_entropy_loss requires multiple rows (B > 1) 
+        # to compute contrastive loss across rows for the same header
+        table_groups = defaultdict(list)
         for t in range(len(table_ids)):
             table_id = table_ids[t]
-            if table_id not in field_categories:
-                continue
-            
+            if table_id in field_categories:
+                table_groups[table_id].append(t)
+        
+        # Process each table group together (all rows from same table)
+        for table_id, row_indices in table_groups.items():
             # Get field categories for this table
             categories = field_categories[table_id]
             low_set = categories.get('low_entropy', set())
@@ -342,11 +356,11 @@ class EntropyAwareContrastiveLoss(nn.Module):
             if not low_set and not high_set:
                 continue
             
-            # Extract table data
-            Eu_t = E_univ[t:t+1]
-            Hc_t = H_ctx[t:t+1] if H_ctx is not None else None
-            Vc_t = V_ctx[t:t+1] if V_ctx is not None else None
-            names_t = header_strings[t:t+1]
+            # Extract all rows for this table
+            Eu_t = E_univ[row_indices]  # (B, H, D) where B = len(row_indices)
+            Hc_t = H_ctx[row_indices] if H_ctx is not None else None
+            Vc_t = V_ctx[row_indices] if V_ctx is not None else None
+            names_t = [header_strings[i] for i in row_indices]
             
             # Compute losses
             low_loss = self._low_entropy_loss(Eu_t, Hc_t, Vc_t, names_t, low_set)
@@ -361,6 +375,19 @@ class EntropyAwareContrastiveLoss(nn.Module):
             # Now safe to check for NaN
             if not torch.isnan(low_loss) and not torch.isnan(high_loss):
                 total_loss += (low_loss + high_loss)
+                low_loss_total += low_loss
+                high_loss_total += high_loss
                 valid_tables += 1
         
-        return total_loss / max(valid_tables, 1)
+        num_tables = max(valid_tables, 1)
+        total_loss = total_loss / num_tables
+        low_loss_avg = low_loss_total / num_tables
+        high_loss_avg = high_loss_total / num_tables
+        
+        if return_dict:
+            return {
+                "total": total_loss,
+                "low_entropy": low_loss_avg,
+                "high_entropy": high_loss_avg
+            }
+        return total_loss

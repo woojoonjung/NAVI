@@ -4,11 +4,12 @@ from io import StringIO
 import torch
 import numpy as np
 
-from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.svm import SVC
+from sklearn.impute import SimpleImputer
 from xgboost import XGBClassifier
 from sklearn.metrics import f1_score
 
@@ -383,6 +384,327 @@ def extract_cls_embeddings_tabbie(dataset, model):
             embeddings.append(cls_emb)
     return np.stack(embeddings)
 
+###################### RAW FEATURE EXTRACTION ##########################
+
+def extract_raw_features(dataset, target_col):
+    """
+    Extract raw features from JSON dataset for end-to-end baselines.
+    
+    Converts JSON rows to numerical feature matrix by:
+    - Keeping numeric fields as-is (converting to float)
+    - Label encoding categorical fields
+    - Excluding text fields or using simple features (length, word count)
+    - Handling missing values
+    
+    Args:
+        dataset: List of JSON dictionaries (rows)
+        target_col: Name of target column to exclude from features
+        
+    Returns:
+        tuple: (X, y) where X is numpy array of features and y is array of labels
+    """
+    import re
+    
+    # Convert to DataFrame for easier processing
+    df = pd.DataFrame(dataset)
+    
+    # Extract labels
+    y = df[target_col].values
+    
+    # Remove target column from features
+    feature_df = df.drop(columns=[target_col])
+    
+    # Process each column
+    processed_features = []
+    feature_names = []
+    
+    for col in feature_df.columns:
+        col_data = feature_df[col]
+        
+        # Check if column is numeric - values must be directly convertible to float or int
+        numeric_values = []
+        is_numeric = True
+        
+        for val in col_data:
+            if pd.isna(val) or val == '' or val is None or val == 'None':
+                numeric_values.append(np.nan)
+                continue
+            
+            # Try to convert directly to float or int
+            try:
+                val_str = str(val).strip()
+                # Try direct conversion (handles scientific notation like "3.4e0", "5", "22.00")
+                try:
+                    float_val = float(val_str)
+                    numeric_values.append(float_val)
+                except ValueError:
+                    # If direct conversion fails, column is not numeric
+                    is_numeric = False
+                    break
+            except (ValueError, TypeError):
+                is_numeric = False
+                break
+        
+        if is_numeric and len([v for v in numeric_values if not pd.isna(v)]) > 0:
+            # Numeric column - keep as float
+            processed_features.append(numeric_values)
+            feature_names.append(f"{col}_numeric")
+        else:
+            # Categorical or text column
+            # Check if it's categorical (limited unique values) or text
+            unique_ratio = col_data.nunique() / len(col_data) if len(col_data) > 0 else 1.0
+            
+            if unique_ratio < 0.5 and col_data.nunique() < 100:
+                # Treat as categorical - use label encoding
+                le = LabelEncoder()
+                # Handle missing values by using a special category
+                col_filled = col_data.fillna('__MISSING__')
+                encoded = le.fit_transform(col_filled.astype(str))
+                processed_features.append(encoded.tolist())
+                feature_names.append(f"{col}_categorical")
+            else:
+                # Treat as text - extract simple features
+                text_features = []
+                for val in col_data:
+                    if pd.isna(val) or val == '' or val is None:
+                        text_features.append([0, 0])  # length=0, word_count=0
+                    else:
+                        val_str = str(val)
+                        text_features.append([len(val_str), len(val_str.split())])
+                
+                # Add as two separate features
+                text_lengths = [f[0] for f in text_features]
+                text_word_counts = [f[1] for f in text_features]
+                processed_features.append(text_lengths)
+                feature_names.append(f"{col}_text_length")
+                processed_features.append(text_word_counts)
+                feature_names.append(f"{col}_text_word_count")
+    
+    # Convert to numpy array
+    if processed_features:
+        X = np.array(processed_features).T  # Transpose to get (n_samples, n_features)
+        
+        # Handle missing values with imputation
+        imputer = SimpleImputer(strategy='median')
+        X = imputer.fit_transform(X)
+        
+        # Ensure all values are finite
+        X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
+    else:
+        # Fallback: create dummy features if no features extracted
+        X = np.zeros((len(dataset), 1))
+    
+    return X, y
+
+def extract_features_tablevectorizer(dataset, target_col):
+    """
+    Extract features using TableVectorizer from skrub.
+    
+    Args:
+        dataset: List of JSON dictionaries (rows)
+        target_col: Name of target column to exclude from features
+        
+    Returns:
+        tuple: (X, y) where X is feature matrix and y is labels
+    """
+    from skrub import TableVectorizer, TextEncoder
+    
+    # Convert to DataFrame
+    df = pd.DataFrame(dataset)
+    
+    # Extract labels
+    y = df[target_col].values
+    
+    # Remove target column from features
+    feature_df = df.drop(columns=[target_col])
+    
+    # Use TableVectorizer with TextEncoder for high-cardinality text columns
+    vectorizer = TableVectorizer(high_cardinality=TextEncoder())
+    
+    # Fit and transform
+    X = vectorizer.fit_transform(feature_df)
+    
+    # Convert to numpy array if it's a sparse matrix
+    if hasattr(X, 'toarray'):
+        X = X.toarray()
+    else:
+        X = np.array(X)
+    
+    return X, y
+
+def extract_features_textencoder(dataset, target_col):
+    """
+    Extract features using TextEncoder from skrub.
+    Linearizes table rows using "{key} is {value}" format similar to BertDataset.
+    
+    Args:
+        dataset: List of JSON dictionaries (rows)
+        target_col: Name of target column to exclude from features
+        
+    Returns:
+        tuple: (X, y) where X is feature matrix and y is labels
+    """
+    from skrub import TextEncoder
+    
+    # Linearize each row into text format: "{key} is {value}"
+    linearized_texts = []
+    y = []
+    
+    for row_dict in dataset:
+        # Remove target column
+        feature_dict = {k: v for k, v in row_dict.items() if k != target_col}
+        
+        # Linearize: "{key} is {value}"
+        text_parts = []
+        for key, value in feature_dict.items():
+            if value is not None and value != '':
+                text_parts.append(f"{key} is {value}")
+        linearized_text = " ".join(text_parts)
+        linearized_texts.append(linearized_text)
+        
+        y.append(row_dict[target_col])
+    
+    # Use TextEncoder to encode the linearized texts
+    text_encoder = TextEncoder()
+    
+    # Convert to DataFrame with single column
+    text_df = pd.DataFrame({'text': linearized_texts})
+    
+    # Fit and transform
+    X = text_encoder.fit_transform(text_df)
+    
+    # Convert to numpy array if it's a sparse matrix
+    if hasattr(X, 'toarray'):
+        X = X.toarray()
+    else:
+        X = np.array(X)
+    
+    y = np.array(y)
+    
+    return X, y
+
+def extract_concatenated_navi_features(dataset, target_col, model, dataset_X):
+    """
+    Extract concatenated features: NAVI embeddings + numerical attributes.
+    
+    Args:
+        dataset: List of JSON dictionaries (rows) with target column
+        target_col: Name of target column
+        model: NAVI model instance
+        dataset_X: Preprocessed dataset (NaviDataset) without target column
+        
+    Returns:
+        tuple: (X, y) where X has shape (n_samples, 768 + n_numerical)
+    """
+    import pandas as pd
+    from sklearn.preprocessing import StandardScaler
+    
+    # Extract NAVI embeddings
+    navi_embeddings = []
+    labels = []
+    numerical_features_list = []
+    
+    # Convert to DataFrame to identify numerical columns
+    df = pd.DataFrame(dataset)
+    feature_df = df.drop(columns=[target_col])
+    
+    # Identify numerical columns - values must be directly convertible to float or int
+    numerical_cols = []
+    for col in feature_df.columns:
+        # First check if already numeric dtype
+        if pd.api.types.is_numeric_dtype(feature_df[col]):
+            numerical_cols.append(col)
+        else:
+            # Check if all non-null values can be directly converted to float or int
+            sample_values = feature_df[col].dropna().head(100)  # Sample first 100 non-null values
+            if len(sample_values) == 0:
+                continue
+            
+            is_numeric = True
+            for val in sample_values:
+                if pd.isna(val) or val == '' or val is None or val == 'None':
+                    continue
+                val_str = str(val).strip()
+                # Try direct conversion to float (handles "5", "22.00", "3.4e0", etc.)
+                try:
+                    float(val_str)
+                except (ValueError, TypeError):
+                    # If any value can't be converted directly, column is not numeric
+                    is_numeric = False
+                    break
+            
+            if is_numeric:
+                numerical_cols.append(col)
+    
+    # Extract features for each row
+    for i, row in enumerate(dataset):
+        # Get NAVI embedding (768-dim)
+        navi_emb = get_cls_embedding(dataset_X, i, model)
+        navi_embeddings.append(navi_emb)
+        
+        # Extract numerical attributes
+        numerical_vals = []
+        for col in numerical_cols:
+            val = row.get(col)
+            if pd.isna(val) or val is None or val == '' or val == 'None':
+                numerical_vals.append(0.0)
+            else:
+                try:
+                    val_str = str(val).strip()
+                    # Direct conversion to float (handles "5", "22.00", "3.4e0", etc.)
+                    numerical_vals.append(float(val_str))
+                except (ValueError, TypeError):
+                    numerical_vals.append(0.0)
+        numerical_features_list.append(numerical_vals)
+        
+        labels.append(row[target_col])
+    
+    # Stack NAVI embeddings
+    navi_X = np.stack(navi_embeddings)  # (n_samples, 768)
+    
+    # Stack numerical features
+    if numerical_cols and len(numerical_cols) > 0:
+        numerical_X = np.array(numerical_features_list)  # (n_samples, n_numerical)
+        
+        # Check if we actually have numerical features (not all empty)
+        if numerical_X.shape[1] > 0:
+            # Scale numerical features
+            scaler = StandardScaler()
+            numerical_X = scaler.fit_transform(numerical_X)
+            
+            # Concatenate
+            X = np.hstack([navi_X, numerical_X])  # (n_samples, 768 + n_numerical)
+        else:
+            # No numerical columns, just use NAVI embeddings
+            X = navi_X
+    else:
+        # No numerical columns, just use NAVI embeddings
+        X = navi_X
+    
+    y = np.array(labels)
+    
+    return X, y
+
+def run_classification_with_features(X, y, model_type="xgboost", test_size=0.2):
+    """
+    Generic function to run classification on features with XGBoost or TabPFN.
+    
+    Args:
+        X: Feature matrix (numpy array)
+        y: Labels (array-like)
+        model_type: "xgboost", "tabpfn", "lr", "rf", or "svm"
+        test_size: Proportion of data to use for testing
+        
+    Returns:
+        float: Macro-F1 score
+    """
+    if model_type == "tabpfn":
+        return run_row_classification_tabpfn(X, y, test_size=test_size)
+    elif model_type in ["xgboost", "lr", "rf", "svm"]:
+        return run_row_classification(X, y, model_type=model_type, test_size=test_size)
+    else:
+        raise ValueError(f"Unsupported model_type: {model_type}")
+
 ###################### CLASSIFICATION EXPERIMENT ##########################
 
 def run_row_classification(X, y, model_type="rf", test_size=0.2):
@@ -390,7 +712,28 @@ def run_row_classification(X, y, model_type="rf", test_size=0.2):
     le = LabelEncoder()
     y_encoded = le.fit_transform(y)
 
+    # Check for NaN values and handle them for models that don't support NaN
+    # Convert to numpy array if needed (handles sparse matrices)
+    if hasattr(X, 'toarray'):
+        X = X.toarray()
+    X = np.asarray(X)
+    
+    has_nan = np.isnan(X).any()
+    
+    # Models that don't support NaN: lr, svm
+    # Models that can handle NaN: rf, xgboost (but we'll impute for consistency)
+    if has_nan:
+        # Use SimpleImputer to fill NaN values with constant value 0
+        imputer = SimpleImputer(strategy='constant', fill_value=0)
+        X = imputer.fit_transform(X)
+
     X_train, X_test, y_train, y_test = train_test_split(X, y_encoded, test_size=test_size, stratify=y_encoded)
+
+    # Scale features for models that are sensitive to feature scales
+    if model_type in ["lr", "svm"]:
+        scaler = StandardScaler()
+        X_train = scaler.fit_transform(X_train)
+        X_test = scaler.transform(X_test)
 
     if model_type == "rf":
         clf = RandomForestClassifier()
@@ -409,6 +752,71 @@ def run_row_classification(X, y, model_type="rf", test_size=0.2):
     f1 = f1_score(y_test, y_pred, average='macro')
     print(f"\n✅ Macro-F1 ({model_type.upper()} row classification): {f1:.4f}")
     return f1
+
+def run_row_classification_tabpfn(X, y, test_size=0.2):
+    """
+    Run classification using TabPFN on raw features.
+    
+    Args:
+        X: Feature matrix (numpy array)
+        y: Labels (array-like)
+        test_size: Proportion of data to use for testing
+        
+    Returns:
+        float: Macro-F1 score
+        
+    Raises:
+        RuntimeError: If TabPFN authentication fails or model cannot be loaded
+    """
+    try:
+        from tabpfn import TabPFNClassifier
+    except ImportError:
+        raise ImportError("TabPFN is not installed. Please install it with: pip install tabpfn")
+    
+    # Encode string labels to integers
+    le = LabelEncoder()
+    y_encoded = le.fit_transform(y)
+    
+    # TabPFN requires specific data types
+    X = X.astype(np.float32)
+    y_encoded = y_encoded.astype(np.int64)
+    
+    # Split data (use current random state for consistency with other classifiers)
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y_encoded, test_size=test_size, stratify=y_encoded
+    )
+    
+    try:
+        # Initialize and train TabPFN
+        # TabPFN is a prior-data fitted network, so it doesn't need training
+        # but we still need to fit it to get predictions
+        # Use GPU if available, otherwise CPU
+        import torch
+        tabpfn_device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        clf = TabPFNClassifier(device=tabpfn_device)
+        clf.fit(X_train, y_train)
+        
+        # Make predictions
+        y_pred = clf.predict(X_test)
+        
+        # Calculate F1 score
+        f1 = f1_score(y_test, y_pred, average='macro')
+        print(f"\n✅ Macro-F1 (TabPFN row classification): {f1:.4f}")
+        return f1
+    except (RuntimeError, Exception) as e:
+        error_msg = str(e)
+        if "Authentication error" in error_msg or "gated" in error_msg.lower():
+            raise RuntimeError(
+                "TabPFN requires HuggingFace authentication for gated models.\n"
+                "Options:\n"
+                "1. Run: hf auth login\n"
+                "2. Set environment variable: export HF_TOKEN=your_token_here\n"
+                "   (Get token from https://huggingface.co/settings/tokens)\n"
+                "3. Visit https://huggingface.co/Prior-Labs/tabpfn_2_5 to accept terms first.\n"
+                f"Original error: {error_msg}"
+            )
+        else:
+            raise RuntimeError(f"TabPFN initialization failed: {error_msg}")
 
 ###################### CLUSTERING EXPERIMENT ##########################
 
