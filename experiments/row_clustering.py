@@ -88,9 +88,11 @@ def load_baseline_models(tokenizer):
 
     # NAVI models - use navi_movie and navi_product_default_3epoch
     def find_epoch2_path(base_path):
-        """Find epoch_2 directory using glob pattern"""
-        pattern = os.path.join(base_path, "*epoch_2")
+        """Find epoch directory using glob pattern, filtered to only models with *_tau0.02_0.05_*"""
+        pattern = os.path.join(base_path, "*epoch*")
         matches = glob.glob(pattern)
+        # Filter to only include paths with _tau0.02_0.05_ in them
+        matches = [m for m in matches if "_tau0.02_0.05_" in m]
         if matches:
             # Prefer the most specific match (longest path)
             matches.sort(key=len, reverse=True)
@@ -98,7 +100,7 @@ def load_baseline_models(tokenizer):
         return None
     
     # NAVI Movie - use navi_movie
-    navi_movie_base = './models/navi_movie_tau0p02_0p14_align0p05_ethresh10_90_ga1'
+    navi_movie_base = './models/navi_movie_default'
     navi_movie_path = find_epoch2_path(navi_movie_base)
     if navi_movie_path:
         models['navi_movie'] = NaviForMaskedLM(navi_movie_path)
@@ -109,7 +111,7 @@ def load_baseline_models(tokenizer):
         print(f"⚠️  NAVI Movie model not found: {navi_movie_base}/*epoch_2")
     
     # NAVI Product - use navi_product_default_3epoch
-    navi_product_base = './models/navi_product_tau0p02_0p14_align0p05_ethresh10_90_ga1'
+    navi_product_base = './models/navi_product_default'
     navi_product_path = find_epoch2_path(navi_product_base)
     if navi_product_path:
         models['navi_product'] = NaviForMaskedLM(navi_product_path)
@@ -282,9 +284,11 @@ def load_tau_align_ethresh_models(tokenizer, domain):
     domain_lower = domain.lower()
     
     def find_epoch2_path(base_path):
-        """Find epoch_2 directory using glob pattern"""
-        pattern = os.path.join(base_path, "*epoch_2")
+        """Find epoch directory using glob pattern, filtered to only models with *_tau0.02_0.05_*"""
+        pattern = os.path.join(base_path, "*epoch*")
         matches = glob.glob(pattern)
+        # Filter to only include paths with _tau0.02_0.05_ in them
+        matches = [m for m in matches if "_tau0.02_0.05_" in m]
         if matches:
             # Prefer the most specific match (longest path)
             matches.sort(key=len, reverse=True)
@@ -329,6 +333,81 @@ def load_tau_align_ethresh_models(tokenizer, domain):
     
     return models
 
+def load_hyperparam_sensitivity_models(tokenizer, domain):
+    """Load hyperparameter sensitivity models: only align*, ethresh*, and tau* variants"""
+    models = {}
+    domain_lower = domain.lower()
+    
+    def find_epoch2_path(base_path):
+        """Find epoch directory using glob pattern, filtered to only models with *_tau0.02_0.05_*"""
+        pattern = os.path.join(base_path, "*epoch*")
+        matches = glob.glob(pattern)
+        # Filter to only include paths with _tau0.02_0.05_ in them
+        matches = [m for m in matches if "_tau0.02_0.05_" in m]
+        if matches:
+            matches.sort(key=len, reverse=True)
+            return matches[0]
+        return None
+    
+    # Find all align* variants using glob
+    align_pattern = f'./models/navi_{domain_lower}_align*'
+    align_dirs = glob.glob(align_pattern)
+    for align_dir in sorted(align_dirs):
+        if os.path.isdir(align_dir):
+            # Extract model name from path
+            model_name = os.path.basename(align_dir)
+            # Skip if it contains hv, vr, or ga (combined variants)
+            if '_hv' in model_name or '_vr' in model_name or '_ga' in model_name:
+                continue
+            model_path = find_epoch2_path(align_dir)
+            if model_path:
+                models[model_name] = NaviForMaskedLM(model_path)
+                models[model_name] = models[model_name].to(device)
+                models[model_name].eval()
+                print(f"✓ Loaded {model_name} from: {model_path}")
+            else:
+                print(f"⚠️  Model not found: {align_dir}/*epoch_2")
+    
+    # Find all ethresh* variants using glob
+    ethresh_pattern = f'./models/navi_{domain_lower}_ethresh*'
+    ethresh_dirs = glob.glob(ethresh_pattern)
+    for ethresh_dir in sorted(ethresh_dirs):
+        if os.path.isdir(ethresh_dir):
+            # Extract model name from path
+            model_name = os.path.basename(ethresh_dir)
+            # Skip if it contains tau, align, hv, vr, or ga (combined variants)
+            if '_tau' in model_name or '_align' in model_name or '_hv' in model_name or '_vr' in model_name or '_ga' in model_name:
+                continue
+            model_path = find_epoch2_path(ethresh_dir)
+            if model_path:
+                models[model_name] = NaviForMaskedLM(model_path)
+                models[model_name] = models[model_name].to(device)
+                models[model_name].eval()
+                print(f"✓ Loaded {model_name} from: {model_path}")
+            else:
+                print(f"⚠️  Model not found: {ethresh_dir}/*epoch_2")
+    
+    # Find all tau* variants using glob
+    tau_pattern = f'./models/navi_{domain_lower}_tau*'
+    tau_dirs = glob.glob(tau_pattern)
+    for tau_dir in sorted(tau_dirs):
+        if os.path.isdir(tau_dir):
+            # Extract model name from path
+            model_name = os.path.basename(tau_dir)
+            # Skip if it contains align, ethresh, hv, vr, or ga (combined variants)
+            if '_align' in model_name or '_ethresh' in model_name or '_hv' in model_name or '_vr' in model_name or '_ga' in model_name:
+                continue
+            model_path = find_epoch2_path(tau_dir)
+            if model_path:
+                models[model_name] = NaviForMaskedLM(model_path)
+                models[model_name] = models[model_name].to(device)
+                models[model_name].eval()
+                print(f"✓ Loaded {model_name} from: {model_path}")
+            else:
+                print(f"⚠️  Model not found: {tau_dir}/*epoch_2")
+    
+    return models
+
 def evaluate_hyperparams(data, target_col, tokenizer, domain, embedding_type="cls"):
     """Evaluate hyperparameter variations with memory management"""
     print(f"\n{domain} - Hyperparameter Variations")
@@ -350,6 +429,25 @@ def evaluate_hyperparams(data, target_col, tokenizer, domain, embedding_type="cl
         print(f"\n{model_name}")
         results[model_name] = run_model_clustering(data, target_col, model, model_name, domain, embedding_type)
     del hv0p8_models
+    clear_memory()
+    
+    return results
+
+def evaluate_hyperparam_sensitivity(data, target_col, tokenizer, domain, embedding_type="cls"):
+    """Evaluate hyperparameter sensitivity analysis: only align*, ethresh*, and tau* variants"""
+    print(f"\n{domain} - Hyperparameter Sensitivity Analysis")
+    results = {}
+    
+    # Load all hyperparameter sensitivity models
+    models = load_hyperparam_sensitivity_models(tokenizer, domain)
+    
+    # Evaluate each model
+    for model_name, model in models.items():
+        print(f"\n{model_name}")
+        results[model_name] = run_model_clustering(data, target_col, model, model_name, domain, embedding_type)
+    
+    # Clear memory
+    del models
     clear_memory()
     
     return results
@@ -397,7 +495,7 @@ def create_json_safe_results(results):
 
 def main():
     parser = argparse.ArgumentParser(description='Run row clustering experiments')
-    parser.add_argument('--model', choices=['baselines', 'ablations', 'hyperparams', 'tau_align_ethresh'], 
+    parser.add_argument('--model', choices=['baselines', 'ablations', 'hyperparams', 'hyperparam_sensitivity', 'tau_align_ethresh'], 
                        required=True, help='Type of models to evaluate')
     parser.add_argument('--domain', choices=['Movie', 'Product'], 
                        required=True, help='Domain to evaluate on')
@@ -459,6 +557,9 @@ def main():
         
     elif args.model == 'hyperparams':
         results = evaluate_hyperparams(data, target_col, tokenizer, args.domain, embedding_type=args.embedding_type)
+    
+    elif args.model == 'hyperparam_sensitivity':
+        results = evaluate_hyperparam_sensitivity(data, target_col, tokenizer, args.domain, embedding_type=args.embedding_type)
     
     elif args.model == 'tau_align_ethresh':
         results = evaluate_tau_align_ethresh(data, target_col, tokenizer, args.domain, embedding_type=args.embedding_type)

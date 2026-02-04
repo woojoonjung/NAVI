@@ -1,0 +1,35 @@
+Masked Prediction Results: Header Prediction and Value Imputation
+(Def=Clean/Default, Perm=Permuted, Syn=Synonym)
+================================================================================
+
+LaTeX Table:
+
+% Requires \usepackage{booktabs} in LaTeX document
+\begin{table}
+\centering
+\begin{tabular}{lccccccccccccccccc}
+\toprule
+Model & Domain & Header (Def) & Value (Def) & Header (Perm) & Value (Perm) & Header (Syn) & Value (Syn) & Header (Typo) & Value (Typo) & Permutation SI & Lexical SI & Cls (Perm) & Imp (Perm) & Cls (Synonym) & Imp (Synonym) & Cls (Typo) & Imp (Typo) \\
+\midrule
+woSSI & movie & 0.3393 & 0.2503 & 0.3324 & 0.2469 & 0.3303 & 0.2451 & 0.3223 & 0.2416 & N/A & N/A & N/A & N/A & N/A & N/A & N/A & N/A \\
+woMSM & movie & 0.9941 & 0.6792 & 0.9960 & 0.6855 & 0.9791 & 0.6911 & 0.9491 & 0.6830 & N/A & N/A & N/A & N/A & N/A & N/A & N/A & N/A \\
+woESA & movie & 0.9994 & 0.7012 & 0.9995 & 0.7048 & 0.9857 & 0.7141 & 0.9519 & 0.6979 & N/A & N/A & N/A & N/A & N/A & N/A & N/A & N/A \\
+woSSI & product & 0.3131 & 0.2661 & 0.3209 & 0.2587 & 0.3145 & 0.2711 & 0.3195 & 0.2648 & N/A & N/A & N/A & N/A & N/A & N/A & N/A & N/A \\
+woMSM & product & 0.9968 & 0.7798 & 0.9969 & 0.7655 & 0.9747 & 0.7700 & 0.9392 & 0.7592 & N/A & N/A & N/A & N/A & N/A & N/A & N/A & N/A \\
+woESA & product & 0.9996 & 0.7977 & 0.9998 & 0.7822 & 0.9769 & 0.7913 & 0.9399 & 0.7759 & N/A & N/A & N/A & N/A & N/A & N/A & N/A & N/A \\
+\bottomrule
+\end{tabular}
+\caption{Masked Prediction Results: Header Prediction and Value Imputation (Def=Clean, Perm=Permuted, Syn=Synonym)}
+\label{tab:masked_prediction}
+\end{table}
+
+
+CSV Data:
+
+Model  Domain Header (Def) Value (Def) Header (Perm) Value (Perm) Header (Syn) Value (Syn) Header (Typo) Value (Typo) Permutation SI Lexical SI Cls (Perm) Imp (Perm) Cls (Synonym) Imp (Synonym) Cls (Typo) Imp (Typo)
+woSSI   movie       0.3393      0.2503        0.3324       0.2469       0.3303      0.2451        0.3223       0.2416            N/A        N/A        N/A        N/A           N/A           N/A        N/A        N/A
+woMSM   movie       0.9941      0.6792        0.9960       0.6855       0.9791      0.6911        0.9491       0.6830            N/A        N/A        N/A        N/A           N/A           N/A        N/A        N/A
+woESA   movie       0.9994      0.7012        0.9995       0.7048       0.9857      0.7141        0.9519       0.6979            N/A        N/A        N/A        N/A           N/A           N/A        N/A        N/A
+woSSI product       0.3131      0.2661        0.3209       0.2587       0.3145      0.2711        0.3195       0.2648            N/A        N/A        N/A        N/A           N/A           N/A        N/A        N/A
+woMSM product       0.9968      0.7798        0.9969       0.7655       0.9747      0.7700        0.9392       0.7592            N/A        N/A        N/A        N/A           N/A           N/A        N/A        N/A
+woESA product       0.9996      0.7977        0.9998       0.7822       0.9769      0.7913        0.9399       0.7759            N/A        N/A        N/A        N/A           N/A           N/A        N/A        N/A

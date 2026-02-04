@@ -1,4 +1,7 @@
 name: navi
+# GPU Configuration: NVIDIA B200 (compute capability 10.0)
+# Note: PyTorch nightly is required for B200 support (compute capability sm_100)
+# Stable PyTorch 2.9.1 does not support B200 - use nightly builds
 channels:
   - conda-forge
   - pytorch
@@ -21,9 +24,11 @@ dependencies:
   - faiss-gpu=1.9.0
   - pip:
     # Core ML/AI packages
-    - torch==2.7.0
-    - torchvision==0.22.0
-    - torchaudio==2.7.0
+    # PyTorch nightly required for B200 GPU support (compute capability 10.0)
+    # Install with: pip install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu130
+    - torch==2.11.0.dev20260117+cu130  # Nightly build for B200 support
+    - torchvision==0.25.0.dev20260117+cu130  # Nightly build for B200 support
+    - torchaudio==2.11.0.dev20260117+cu130  # Nightly build for B200 support
     - transformers==4.51.3
     - sentence-transformers==2.2.2
     - datasets==3.5.1

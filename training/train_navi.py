@@ -127,8 +127,8 @@ def parse_args():
     parser.add_argument("--ablation_type", type=str, required=True,
                        choices=['full', 'woESA', 'woSSI', "woMSM"],
                        help="Ablation type to use")
-    parser.add_argument("--batch_size", type=int, default=32, help="Batch size")
-    parser.add_argument("--gradient_accumulation_steps", type=int, default=1, help="Number of gradient accumulation steps")
+    parser.add_argument("--batch_size", type=int, default=16, help="Batch size")
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=2, help="Number of gradient accumulation steps")
     parser.add_argument("--tables_per_batch", type=int, default=4, help="Number of tables to process simultaneously")
     parser.add_argument("--num_epochs", type=int, default=2, help="Number of training epochs")
     parser.add_argument("--learning_rate", type=float, default=3e-5, help="Learning rate")

@@ -463,91 +463,77 @@ def evaluate_tau_align_ethresh(dataset, tokenizer, collator, domain):
     return results
 
 def load_hyperparam_sensitivity_models(tokenizer, domain):
-    """Load hyperparameter sensitivity models based on log file entries"""
+    """Load hyperparameter sensitivity models: only align*, ethresh*, and tau* variants"""
     models = {}
     domain_lower = domain.lower()
     
     def find_epoch2_path(base_path):
-        """Find epoch_2 directory using glob pattern"""
-        pattern = os.path.join(base_path, "*epoch_2")
+        """Find epoch directory using glob pattern, filtered to paths ending with *_epoch2 and excluding tau-related matches"""
+        pattern = os.path.join(base_path, "*epoch*")
         matches = glob.glob(pattern)
+        # Filter to only include paths ending with _epoch2 or _epoch_2, and exclude tau-related matches
+        matches = [m for m in matches if (os.path.basename(m).endswith("_epoch2") or os.path.basename(m).endswith("_epoch_2")) and "_tau" not in os.path.basename(m)]
         if matches:
             matches.sort(key=len, reverse=True)
             return matches[0]
         return None
     
-    # Alignment Weight Variants
-    align_values = ['0p01', '0p25', '1p25']
-    for align in align_values:
-        base_path = f'./models/navi_{domain_lower}_align{align}'
-        model_path = find_epoch2_path(base_path)
-        if model_path:
-            model_name = f'navi_{domain_lower}_align{align}'
-            models[model_name] = NaviForMaskedLM(model_path)
-            models[model_name] = models[model_name].to(device)
-            models[model_name].eval()
-            print(f"✓ Loaded {model_name} from: {model_path}")
-        else:
-            print(f"⚠️  Model not found: {base_path}/*epoch_2")
+    # Find all align* variants using glob
+    align_pattern = f'./models/navi_{domain_lower}_align*'
+    align_dirs = glob.glob(align_pattern)
+    for align_dir in sorted(align_dirs):
+        if os.path.isdir(align_dir):
+            # Extract model name from path
+            model_name = os.path.basename(align_dir)
+            # Skip if it contains hv, vr, or ga (combined variants)
+            if '_hv' in model_name or '_vr' in model_name or '_ga' in model_name:
+                continue
+            model_path = find_epoch2_path(align_dir)
+            if model_path:
+                models[model_name] = NaviForMaskedLM(model_path)
+                models[model_name] = models[model_name].to(device)
+                models[model_name].eval()
+                print(f"✓ Loaded {model_name} from: {model_path}")
+            else:
+                print(f"⚠️  Model not found: {align_dir}/*epoch_2")
     
-    # HV Weight & Value Ratio Variants
-    hv_vr_combinations = [
-        ('0p8', '0p25'), ('0p8', '0p75'),
-        ('0p4', '0p25'), ('0p4', '0p5'), ('0p4', '0p75')
-    ]
-    for hv, vr in hv_vr_combinations:
-        base_path = f'./models/navi_{domain_lower}_hv{hv}_vr{vr}'
-        model_path = find_epoch2_path(base_path)
-        if model_path:
-            model_name = f'navi_{domain_lower}_hv{hv}_vr{vr}'
-            models[model_name] = NaviForMaskedLM(model_path)
-            models[model_name] = models[model_name].to(device)
-            models[model_name].eval()
-            print(f"✓ Loaded {model_name} from: {model_path}")
-        else:
-            print(f"⚠️  Model not found: {base_path}/*epoch_2")
+    # Find all ethresh* variants using glob
+    ethresh_pattern = f'./models/navi_{domain_lower}_ethresh*'
+    ethresh_dirs = glob.glob(ethresh_pattern)
+    for ethresh_dir in sorted(ethresh_dirs):
+        if os.path.isdir(ethresh_dir):
+            # Extract model name from path
+            model_name = os.path.basename(ethresh_dir)
+            # Skip if it contains tau, align, hv, vr, or ga (combined variants)
+            if '_tau' in model_name or '_align' in model_name or '_hv' in model_name or '_vr' in model_name or '_ga' in model_name:
+                continue
+            model_path = find_epoch2_path(ethresh_dir)
+            if model_path:
+                models[model_name] = NaviForMaskedLM(model_path)
+                models[model_name] = models[model_name].to(device)
+                models[model_name].eval()
+                print(f"✓ Loaded {model_name} from: {model_path}")
+            else:
+                print(f"⚠️  Model not found: {ethresh_dir}/*epoch_2")
     
-    # Entropy Threshold Variants
-    ethresh_values = ['25_75', '40_60', '50_50']
-    for ethresh in ethresh_values:
-        base_path = f'./models/navi_{domain_lower}_ethresh{ethresh}'
-        model_path = find_epoch2_path(base_path)
-        if model_path:
-            model_name = f'navi_{domain_lower}_ethresh{ethresh}'
-            models[model_name] = NaviForMaskedLM(model_path)
-            models[model_name] = models[model_name].to(device)
-            models[model_name].eval()
-            print(f"✓ Loaded {model_name} from: {model_path}")
-        else:
-            print(f"⚠️  Model not found: {base_path}/*epoch_2")
-    
-    # Temperature Variants
-    tau_values = ['0p02_0p02', '0p14_0p14']
-    for tau in tau_values:
-        base_path = f'./models/navi_{domain_lower}_tau{tau}'
-        model_path = find_epoch2_path(base_path)
-        if model_path:
-            model_name = f'navi_{domain_lower}_tau{tau}'
-            models[model_name] = NaviForMaskedLM(model_path)
-            models[model_name] = models[model_name].to(device)
-            models[model_name].eval()
-            print(f"✓ Loaded {model_name} from: {model_path}")
-        else:
-            print(f"⚠️  Model not found: {base_path}/*epoch_2")
-    
-    # Negative Set Size Steps Variants
-    ga_values = ['2', '4']
-    for ga in ga_values:
-        base_path = f'./models/navi_{domain_lower}_ga{ga}'
-        model_path = find_epoch2_path(base_path)
-        if model_path:
-            model_name = f'navi_{domain_lower}_ga{ga}'
-            models[model_name] = NaviForMaskedLM(model_path)
-            models[model_name] = models[model_name].to(device)
-            models[model_name].eval()
-            print(f"✓ Loaded {model_name} from: {model_path}")
-        else:
-            print(f"⚠️  Model not found: {base_path}/*epoch_2")
+    # Find all tau* variants using glob
+    tau_pattern = f'./models/navi_{domain_lower}_tau*'
+    tau_dirs = glob.glob(tau_pattern)
+    for tau_dir in sorted(tau_dirs):
+        if os.path.isdir(tau_dir):
+            # Extract model name from path
+            model_name = os.path.basename(tau_dir)
+            # Skip if it contains align, ethresh, hv, vr, or ga (combined variants)
+            if '_align' in model_name or '_ethresh' in model_name or '_hv' in model_name or '_vr' in model_name or '_ga' in model_name:
+                continue
+            model_path = find_epoch2_path(tau_dir)
+            if model_path:
+                models[model_name] = NaviForMaskedLM(model_path)
+                models[model_name] = models[model_name].to(device)
+                models[model_name].eval()
+                print(f"✓ Loaded {model_name} from: {model_path}")
+            else:
+                print(f"⚠️  Model not found: {tau_dir}/*epoch_2")
     
     return models
 

@@ -1,0 +1,40 @@
+Header Clustering Quality
+================================================================================
+
+LaTeX Table:
+
+% Requires \usepackage{booktabs,graphicx} in LaTeX document
+\begin{table}
+\centering
+\resizebox{0.5\textwidth}{!}{%
+\begin{tabular}{lccc}
+\toprule
+Model & Domain & B³-F1 & NMI \\
+\midrule
+bert & movie & N/A & N/A \\
+tapas & movie & N/A & N/A \\
+haetae & movie & N/A & N/A \\
+navi & movie & N/A & N/A \\
+bert & product & N/A & N/A \\
+tapas & product & N/A & N/A \\
+haetae & product & N/A & N/A \\
+navi & product & N/A & N/A \\
+\bottomrule
+\end{tabular}
+}%
+\caption{Header Clustering Quality}
+\label{tab:header_clustering}
+\end{table}
+
+
+CSV Data:
+
+ Model  Domain B³-F1 NMI
+  bert   movie   N/A N/A
+ tapas   movie   N/A N/A
+haetae   movie   N/A N/A
+  navi   movie   N/A N/A
+  bert product   N/A N/A
+ tapas product   N/A N/A
+haetae product   N/A N/A
+  navi product   N/A N/A

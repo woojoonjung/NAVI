@@ -1,0 +1,54 @@
+Robustness to Lexical and Structural Perturbations
+================================================================================
+
+LaTeX Table:
+
+% Requires \usepackage{booktabs} in LaTeX document
+\begin{table}
+\centering
+\begin{tabular}{lcccccccccc}
+\toprule
+Model & Domain & Embedding Type & Permutation SI & Lexical SI & Cls (Perm) & Imp (Perm) & Cls (Synonym) & Imp (Synonym) & Cls (Typo) & Imp (Typo) \\
+\midrule
+bert & movie & meanpooled & 0.0077 & 0.0012 & 0.5755 & 0.4468 & 0.6139 & 0.4705 & 0.6578 & 0.4734 \\
+bert & movie & cls & 0.0557 & 0.0025 & 0.5755 & 0.4468 & 0.6139 & 0.4705 & 0.6578 & 0.4734 \\
+tapas & movie & meanpooled & 0.0064 & 0.0012 & 0.6214 & 0.2010 & 0.6387 & 0.1779 & 0.6663 & 0.1841 \\
+tapas & movie & cls & 0.0085 & 0.0008 & 0.6214 & 0.2010 & 0.6387 & 0.1779 & 0.6663 & 0.1841 \\
+haetae & movie & meanpooled & 0.0089 & 0.0015 & 0.5712 & 0.4324 & 0.6054 & 0.4563 & 0.6226 & 0.4508 \\
+haetae & movie & cls & 0.0555 & 0.0030 & 0.5712 & 0.4324 & 0.6054 & 0.4563 & 0.6226 & 0.4508 \\
+navi & movie & meanpooled & -0.0000 & 0.0021 & 0.5841 & 0.7062 & 0.6009 & 0.7094 & 0.5987 & 0.7063 \\
+navi & movie & cls & 0.0000 & 0.0022 & 0.5841 & 0.7062 & 0.6009 & 0.7094 & 0.5987 & 0.7063 \\
+bert & product & meanpooled & 0.0078 & 0.0011 & 0.9033 & 0.4992 & 0.9075 & 0.5272 & 0.9005 & 0.5292 \\
+bert & product & cls & 0.0672 & 0.0023 & 0.9033 & 0.4992 & 0.9075 & 0.5272 & 0.9005 & 0.5292 \\
+tapas & product & meanpooled & 0.0080 & 0.0009 & 0.8997 & 0.2476 & 0.9171 & 0.2158 & 0.9205 & 0.2189 \\
+tapas & product & cls & 0.0131 & 0.0007 & 0.8997 & 0.2476 & 0.9171 & 0.2158 & 0.9205 & 0.2189 \\
+haetae & product & meanpooled & 0.0091 & 0.0012 & 0.9085 & 0.4759 & 0.8949 & 0.5071 & 0.8943 & 0.5016 \\
+haetae & product & cls & 0.0616 & 0.0022 & 0.9085 & 0.4759 & 0.8949 & 0.5071 & 0.8943 & 0.5016 \\
+navi & product & meanpooled & -0.0000 & 0.0022 & 0.9297 & 0.7804 & 0.9331 & 0.7860 & 0.9321 & 0.7798 \\
+navi & product & cls & -0.0000 & 0.0040 & 0.9297 & 0.7804 & 0.9331 & 0.7860 & 0.9321 & 0.7798 \\
+\bottomrule
+\end{tabular}
+\caption{Robustness to Lexical and Structural Perturbations}
+\label{tab:robustness}
+\end{table}
+
+
+CSV Data:
+
+ Model  Domain Embedding Type Permutation SI Lexical SI Cls (Perm) Imp (Perm) Cls (Synonym) Imp (Synonym) Cls (Typo) Imp (Typo)
+  bert   movie     meanpooled         0.0077     0.0012     0.5755     0.4468        0.6139        0.4705     0.6578     0.4734
+  bert   movie            cls         0.0557     0.0025     0.5755     0.4468        0.6139        0.4705     0.6578     0.4734
+ tapas   movie     meanpooled         0.0064     0.0012     0.6214     0.2010        0.6387        0.1779     0.6663     0.1841
+ tapas   movie            cls         0.0085     0.0008     0.6214     0.2010        0.6387        0.1779     0.6663     0.1841
+haetae   movie     meanpooled         0.0089     0.0015     0.5712     0.4324        0.6054        0.4563     0.6226     0.4508
+haetae   movie            cls         0.0555     0.0030     0.5712     0.4324        0.6054        0.4563     0.6226     0.4508
+  navi   movie     meanpooled        -0.0000     0.0021     0.5841     0.7062        0.6009        0.7094     0.5987     0.7063
+  navi   movie            cls         0.0000     0.0022     0.5841     0.7062        0.6009        0.7094     0.5987     0.7063
+  bert product     meanpooled         0.0078     0.0011     0.9033     0.4992        0.9075        0.5272     0.9005     0.5292
+  bert product            cls         0.0672     0.0023     0.9033     0.4992        0.9075        0.5272     0.9005     0.5292
+ tapas product     meanpooled         0.0080     0.0009     0.8997     0.2476        0.9171        0.2158     0.9205     0.2189
+ tapas product            cls         0.0131     0.0007     0.8997     0.2476        0.9171        0.2158     0.9205     0.2189
+haetae product     meanpooled         0.0091     0.0012     0.9085     0.4759        0.8949        0.5071     0.8943     0.5016
+haetae product            cls         0.0616     0.0022     0.9085     0.4759        0.8949        0.5071     0.8943     0.5016
+  navi product     meanpooled        -0.0000     0.0022     0.9297     0.7804        0.9331        0.7860     0.9321     0.7798
+  navi product            cls        -0.0000     0.0040     0.9297     0.7804        0.9331        0.7860     0.9321     0.7798

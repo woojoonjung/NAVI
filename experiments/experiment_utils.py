@@ -6,11 +6,12 @@ import numpy as np
 
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.model_selection import train_test_split
-from sklearn.ensemble import RandomForestClassifier
+# from sklearn.ensemble import RandomForestClassifier  # Commented out - not used
 from sklearn.linear_model import LogisticRegression
-from sklearn.svm import SVC
+# from sklearn.svm import SVC  # Removed - not used
 from sklearn.impute import SimpleImputer
 from xgboost import XGBClassifier
+from catboost import CatBoostClassifier
 from sklearn.metrics import f1_score
 
 from sklearn.cluster import KMeans, DBSCAN, AgglomerativeClustering
@@ -507,7 +508,7 @@ def extract_features_tablevectorizer(dataset, target_col):
     Returns:
         tuple: (X, y) where X is feature matrix and y is labels
     """
-    from skrub import TableVectorizer, TextEncoder
+    from skrub import TableVectorizer
     
     # Convert to DataFrame
     df = pd.DataFrame(dataset)
@@ -518,11 +519,19 @@ def extract_features_tablevectorizer(dataset, target_col):
     # Remove target column from features
     feature_df = df.drop(columns=[target_col])
     
-    # Use TableVectorizer with TextEncoder for high-cardinality text columns
-    vectorizer = TableVectorizer(high_cardinality=TextEncoder())
-    
-    # Fit and transform
-    X = vectorizer.fit_transform(feature_df)
+    # Try to use TextEncoder for high-cardinality text columns, fall back to default if it fails
+    vectorizer = None
+    try:
+        from skrub import TextEncoder
+        # Use TableVectorizer with TextEncoder for high-cardinality text columns
+        vectorizer = TableVectorizer(high_cardinality=TextEncoder())
+        # Try to fit_transform - if this fails, we'll fall back to default
+        X = vectorizer.fit_transform(feature_df)
+    except (ImportError, ValueError, Exception) as e:
+        # If TextEncoder fails (e.g., due to dependency issues), use default TableVectorizer
+        print(f"⚠️  Warning: TextEncoder failed ({type(e).__name__}: {e}), using default TableVectorizer")
+        vectorizer = TableVectorizer()
+        X = vectorizer.fit_transform(feature_df)
     
     # Convert to numpy array if it's a sparse matrix
     if hasattr(X, 'toarray'):
@@ -687,12 +696,12 @@ def extract_concatenated_navi_features(dataset, target_col, model, dataset_X):
 
 def run_classification_with_features(X, y, model_type="xgboost", test_size=0.2):
     """
-    Generic function to run classification on features with XGBoost or TabPFN.
+    Generic function to run classification on features with XGBoost, CatBoost, LogisticRegression, or TabPFN.
     
     Args:
         X: Feature matrix (numpy array)
         y: Labels (array-like)
-        model_type: "xgboost", "tabpfn", "lr", "rf", or "svm"
+        model_type: "xgboost", "catboost", "tabpfn", or "lr"
         test_size: Proportion of data to use for testing
         
     Returns:
@@ -700,14 +709,14 @@ def run_classification_with_features(X, y, model_type="xgboost", test_size=0.2):
     """
     if model_type == "tabpfn":
         return run_row_classification_tabpfn(X, y, test_size=test_size)
-    elif model_type in ["xgboost", "lr", "rf", "svm"]:
+    elif model_type in ["xgboost", "catboost", "lr"]:
         return run_row_classification(X, y, model_type=model_type, test_size=test_size)
     else:
         raise ValueError(f"Unsupported model_type: {model_type}")
 
 ###################### CLASSIFICATION EXPERIMENT ##########################
 
-def run_row_classification(X, y, model_type="rf", test_size=0.2):
+def run_row_classification(X, y, model_type="xgboost", test_size=0.2):
     # ✅ Encode string labels to integers
     le = LabelEncoder()
     y_encoded = le.fit_transform(y)
@@ -720,29 +729,38 @@ def run_row_classification(X, y, model_type="rf", test_size=0.2):
     
     has_nan = np.isnan(X).any()
     
-    # Models that don't support NaN: lr, svm
-    # Models that can handle NaN: rf, xgboost (but we'll impute for consistency)
+    # Models that don't support NaN: lr
+    # Models that can handle NaN: xgboost, catboost (but we'll impute for consistency)
     if has_nan:
         # Use SimpleImputer to fill NaN values with constant value 0
         imputer = SimpleImputer(strategy='constant', fill_value=0)
         X = imputer.fit_transform(X)
 
-    X_train, X_test, y_train, y_test = train_test_split(X, y_encoded, test_size=test_size, stratify=y_encoded)
+    # Use random_state=None to respect np.random.seed() set by caller
+    # This ensures reproducibility when the same seed is used
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y_encoded, test_size=test_size, stratify=y_encoded, random_state=None
+    )
 
     # Scale features for models that are sensitive to feature scales
-    if model_type in ["lr", "svm"]:
+    if model_type == "lr":
         scaler = StandardScaler()
         X_train = scaler.fit_transform(X_train)
         X_test = scaler.transform(X_test)
 
-    if model_type == "rf":
-        clf = RandomForestClassifier()
-    elif model_type == "xgboost":
-        clf = XGBClassifier(use_label_encoder=False, eval_metric='mlogloss', tree_method='gpu_hist')
+    # Use random_state=None to respect np.random.seed() set by caller
+    # This ensures reproducibility when the same seed is used
+    # if model_type == "rf":
+    #     clf = RandomForestClassifier(random_state=None)  # Commented out - not used
+    if model_type == "xgboost":
+        # XGBoost >= 2.0 removed/changed GPU tree_method strings like "gpu_hist".
+        # Use "hist" for broad compatibility; GPU usage (if available) is handled
+        # by XGBoost configuration/installation rather than this string.
+        clf = XGBClassifier(use_label_encoder=False, eval_metric='mlogloss', tree_method='hist', random_state=None)
+    elif model_type == "catboost":
+        clf = CatBoostClassifier(random_state=None, verbose=False, iterations=100)
     elif model_type == "lr":
-        clf = LogisticRegression(max_iter=1000)
-    elif model_type == "svm":
-        clf = SVC()
+        clf = LogisticRegression(max_iter=1000, random_state=None)
     else:
         raise ValueError(f"Unsupported model_type: {model_type}")
 
@@ -768,10 +786,57 @@ def run_row_classification_tabpfn(X, y, test_size=0.2):
     Raises:
         RuntimeError: If TabPFN authentication fails or model cannot be loaded
     """
+    # TabPFN depends on numba/llvmlite. On some systems the dynamic loader may pick up
+    # an older system libstdc++ first, causing errors like:
+    #   CXXABI_1.3.15 not found (required by .../libllvmlite.so)
+    #
+    # Make the runtime more robust by:
+    # - Prepending $CONDA_PREFIX/lib to LD_LIBRARY_PATH
+    # - Preloading conda's libstdc++/libgcc_s with RTLD_GLOBAL
+    def _ensure_conda_runtime_for_llvmlite():
+        import os
+        import ctypes
+
+        prefix = os.environ.get("CONDA_PREFIX")
+        if not prefix:
+            return
+
+        libdir = os.path.join(prefix, "lib")
+
+        # Ensure LD_LIBRARY_PATH prefers conda libs.
+        ld = os.environ.get("LD_LIBRARY_PATH", "")
+        ld_parts = [p for p in ld.split(":") if p]
+        if libdir not in ld_parts:
+            os.environ["LD_LIBRARY_PATH"] = f"{libdir}:{ld}" if ld else libdir
+
+        # Preload runtime libs if present.
+        candidates = [
+            os.path.join(libdir, "libstdc++.so.6"),
+            os.path.join(prefix, "libstdc++.so.6"),
+            os.path.join(libdir, "libgcc_s.so.1"),
+            os.path.join(prefix, "libgcc_s.so.1"),
+        ]
+        for path in candidates:
+            if os.path.exists(path):
+                try:
+                    ctypes.CDLL(path, mode=ctypes.RTLD_GLOBAL)
+                except OSError:
+                    # Best-effort: if it fails, the subsequent import will raise with details.
+                    pass
+
+    _ensure_conda_runtime_for_llvmlite()
+
     try:
         from tabpfn import TabPFNClassifier
     except ImportError:
         raise ImportError("TabPFN is not installed. Please install it with: pip install tabpfn")
+    except OSError as e:
+        # Commonly triggered by llvmlite/numba binary/runtime issues.
+        raise RuntimeError(
+            "TabPFN import failed due to a native dependency issue (likely numba/llvmlite + libstdc++).\n"
+            "If you're using conda, try re-activating the env so LD_LIBRARY_PATH points to $CONDA_PREFIX/lib.\n"
+            f"Original error: {e}"
+        )
     
     # Encode string labels to integers
     le = LabelEncoder()
@@ -781,9 +846,10 @@ def run_row_classification_tabpfn(X, y, test_size=0.2):
     X = X.astype(np.float32)
     y_encoded = y_encoded.astype(np.int64)
     
-    # Split data (use current random state for consistency with other classifiers)
+    # Split data (use random_state=None to respect np.random.seed() set by caller)
+    # This ensures reproducibility when the same seed is used
     X_train, X_test, y_train, y_test = train_test_split(
-        X, y_encoded, test_size=test_size, stratify=y_encoded
+        X, y_encoded, test_size=test_size, stratify=y_encoded, random_state=None
     )
     
     try:
@@ -899,8 +965,10 @@ def run_row_clustering(X, y):
     print(f"  Target number of clusters: {n_clusters}")
     
     # Define clustering models
+    # Use random_state=None to respect np.random.seed() set by caller
+    # This ensures reproducibility when the same seed is used
     models = {
-        "KMeans": KMeans(n_clusters=n_clusters, random_state=42, n_init=10),
+        "KMeans": KMeans(n_clusters=n_clusters, random_state=None, n_init=10),
         "Agglomerative": AgglomerativeClustering(n_clusters=n_clusters),
     }
     
