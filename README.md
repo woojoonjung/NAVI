@@ -151,19 +151,13 @@ python experiments/row_classification.py --model baselines --domain Movie
 python experiments/row_classification.py --model baselines --domain Product
 ```
 
-#### Row Clustering
-```bash
-python experiments/row_clustering.py --model baselines --domain Movie
-python experiments/row_clustering.py --model baselines --domain Product
-```
-
-#### Domain Consistency Experiment
+#### Header Clustering
 
 *Prerequisites*: Canonical sets are prepared in artifacts/lexvar
 
 ```bash
 # Run complete pipeline
-./experiments/run_domain_consistency_exp.sh
+./experiments/run_header_clustering.sh
 
 # Run individual steps
 python experiments/domain_consistency_get_header_embeddings.py \
@@ -172,22 +166,28 @@ python experiments/domain_consistency_get_header_embeddings.py \
     --domains Movie_top100_cleaned Product_top100_cleaned \
     --models bert tapas haetae navi
 
-python experiments/domain_consistency_exp.py \
+python experiments/header_clustering.py \
     --artifacts_dir artifacts/lexvar \
     --domains Quarter_Movie_top100_cleaned Quarter_Product_top100_cleaned \
     --models bert tapas haetae navi
 ```
 
-#### Structural Consistency Experiment
+#### Robustness Analysis
+
 ```bash
-python experiments/structural_consistency_exp.py \
-    --data_dir data \
-    --artifacts_dir artifacts/structvar \
-    --domains Movie_top100_cleaned Product_top100_cleaned \
-    --models bert tapas haetae navi \
-    --n_samples 100 \
-    --n_permutations 5
+# Run default mode
+python experiments/robustness_exp.py
+
+# Run on specific domains
+python experiments/robustness_exp.py --domains cleaned/Movie
+python experiments/robustness_exp.py --domains cleaned/Product
+
+# Run specific models only
+python experiments/robustness_exp.py --models bert tapas haetae navi
+python experiments/robustness_exp.py --models woSSI woMSM woESA
 ```
+
+Results are saved to `experiments/robustness_results/`:
 
 #### Segment Visualization
 ```bash
@@ -217,7 +217,6 @@ python experiments/visualization_plot_segments.py \
 
 - **Masked Prediction**: Console output with accuracy scores
 - **Row Classification**: Console output with F1 scores
-- **Row Clustering**: Console output with clustering metrics
-- **Domain Consistency**: `artifacts/lexvar/` directory
-- **Structural Consistency**: `artifacts/structvar/` directory
+- **Header Clustering**: `artifacts/lexvar/` directory
+- **Robustness Analysis**: `artifacts/structvar/` directory
 - **Segment Visualization**: `artifacts/segment_visualization/` directory
