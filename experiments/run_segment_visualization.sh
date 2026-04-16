@@ -21,7 +21,7 @@ echo ""
 
 # Step 1: Extract segment embeddings
 echo "Step 1: Extracting segment embeddings..."
-python experiments/visualization_get_segment_embeddings.py \
+python experiments/visualization/get_segment_embeddings.py \
     --model_path "$MODEL_PATH" \
     --output_path "$OUTPUT_DIR/segments" \
     --n_tables $N_TABLES \
@@ -31,7 +31,7 @@ python experiments/visualization_get_segment_embeddings.py \
 # Step 2: Create visualizations
 echo ""
 echo "Step 2: Creating visualizations..."
-python experiments/visualization_plot_segments.py \
+python experiments/visualization/plot_segments.py \
     --input "$OUTPUT_DIR/segments/segments.json" \
     --outdir "$OUTPUT_DIR/plots" \
     --model-name "Navi" \

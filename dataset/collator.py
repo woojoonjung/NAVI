@@ -269,6 +269,8 @@ class CollatorForMaskedPrediction(DataCollatorForLanguageModeling):
     mask_replace_prob: float = 0.8
     random_replace_prob: float = 0.1
     field_targeting_epochs: int = 8
+    # When True (unified_semantic only): mask every subword in each sampled field (ignore token_length_threshold).
+    mask_full_field: bool = False
 
     def __init__(self, tokenizer, **kwargs):
         super().__init__(tokenizer)
@@ -340,7 +342,10 @@ class CollatorForMaskedPrediction(DataCollatorForLanguageModeling):
                 positions = field_dict[field]
                 if not positions:
                     continue
-                if len(positions) <= threshold:
+                if getattr(self, "mask_full_field", False):
+                    for pos in positions:
+                        probability_matrix[batch_idx, pos] = 1.0
+                elif len(positions) <= threshold:
                     for pos in positions:
                         probability_matrix[batch_idx, pos] = 1.0
                 else:

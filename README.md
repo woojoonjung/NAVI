@@ -29,6 +29,41 @@ python -c "from model.navi import NaviForMaskedLM; from dataset.dataset import N
 
 ## Data Preparation
 
+### Reproducibility check: use verified-clean raw tables
+
+This copy is configured to read raw tables from:
+
+- `/home/work/Tabular-Embedding/data_corruption_debug/uploaded_unzipped_to_server/Movie_top100`
+- `/home/work/Tabular-Embedding/data_corruption_debug/uploaded_unzipped_to_server/Product_top100`
+
+and to write all derived artifacts under this directory:
+
+- `data/flattened/...`
+- `data/cleaned/...`
+
+Run preprocessing from this directory:
+
+```bash
+cd /home/work/Tabular-Embedding/navi_icml_reproducibility_check
+python dataset/preprocess.py
+```
+
+Then train (examples):
+
+```bash
+# NAVI (Movie)
+python training/train_navi.py --data_path data/cleaned/Movie/train --validation_dir data/cleaned/Movie/validation
+
+# NAVI (Product)
+python training/train_navi.py --data_path data/cleaned/Product/train --validation_dir data/cleaned/Product/validation
+
+# BERT baseline (Movie)
+python training/train_bert.py --data_path data/cleaned/Movie/train --validation_dir data/cleaned/Movie/validation
+
+# HAETAE baseline (Product)
+python baselines/haetae/train.py --data_path data/cleaned/Product/train --validation_dir data/cleaned/Product/validation
+```
+
 ### Download Datasets
 The datasets used for training are publicly available at Web Data Commons (`https://webdatacommons.org/structureddata/schemaorgtables/2023/`).
 We constructed our pretraining data from the Top-100 subsets of the Product and Movie domains.
@@ -139,55 +174,97 @@ bash pretrain_baselines.sh
 
 ### Experiments
 
+The experiments are organized into task-specific subdirectories:
+
+```text
+experiments/
+├── masked_prediction/          # Masked prediction evaluation
+├── downstream_tasks/          # Row classification tasks
+├── robustness_analysis/        # Robustness to perturbations
+├── header_clustering/          # Header clustering evaluation
+└── visualization/              # Embedding visualization
+```
+
 #### Masked Prediction
 ```bash
-python experiments/masked_prediction.py --model baselines --domain Movie
-python experiments/masked_prediction.py --model baselines --domain Product
+# Using the convenience script
+./experiments/run_masked_prediction.sh Movie baselines
+./experiments/run_masked_prediction.sh Product baselines
+
+# Or directly
+python experiments/masked_prediction/masked_prediction.py --model baselines --domain Movie
+python experiments/masked_prediction/masked_prediction.py --model baselines --domain Product
 ```
 
 #### Row Classification
 ```bash
-python experiments/row_classification.py --model baselines --domain Movie
-python experiments/row_classification.py --model baselines --domain Product
+# Using the convenience script
+./experiments/run_classification.sh lm_encoders Movie cls
+./experiments/run_classification.sh fe_pipelines Product meanpooled
+./experiments/run_classification.sh ablations Movie cls
+
+# Or directly
+python experiments/downstream_tasks/row_classification.py --mode lm_encoders --domain Movie --embedding_type cls
+python experiments/downstream_tasks/row_classification.py --mode fe_pipelines --domain Product --embedding_type meanpooled
+python experiments/downstream_tasks/row_classification.py --mode ablations --domain Movie --embedding_type cls
 ```
+
+**Modes:**
+- `lm_encoders`: Language model encoders (BERT, TAPAS, HAETAE, NAVI)
+- `fe_pipelines`: Feature engineering pipelines (TableVectorizer, NAVI_concat)
+- `ablations`: Ablation studies (wo_PER, wo_MSM, wo_ESA, wo_GHA, wo_GHC)
 
 #### Header Clustering
 
-*Prerequisites*: Canonical sets are prepared in artifacts/lexvar
+*Prerequisites*: Canonical sets are prepared in `artifacts/lexvar/`. You can generate them using:
+```bash
+python experiments/header_clustering/get_canonical_sets.py
+```
 
 ```bash
 # Run complete pipeline
 ./experiments/run_header_clustering.sh
 
 # Run individual steps
-python experiments/domain_consistency_get_header_embeddings.py \
+python experiments/header_clustering/get_header_embeddings.py \
     --data_dir data \
     --artifacts_dir artifacts/lexvar \
-    --domains Movie_top100_cleaned Product_top100_cleaned \
+    --domains cleaned/Movie cleaned/Product \
     --models bert tapas haetae navi
 
-python experiments/header_clustering.py \
+python experiments/header_clustering/header_clustering.py \
     --artifacts_dir artifacts/lexvar \
-    --domains Quarter_Movie_top100_cleaned Quarter_Product_top100_cleaned \
+    --domains cleaned/Movie cleaned/Product \
     --models bert tapas haetae navi
 ```
 
 #### Robustness Analysis
 
 ```bash
-# Run default mode
-python experiments/robustness_exp.py
+# Using the convenience script
+./experiments/run_robustness_analysis.sh
+
+# Or directly
+python experiments/robustness_analysis/robustness_exp.py
 
 # Run on specific domains
-python experiments/robustness_exp.py --domains cleaned/Movie
-python experiments/robustness_exp.py --domains cleaned/Product
+python experiments/robustness_analysis/robustness_exp.py --domains cleaned/Movie
+python experiments/robustness_analysis/robustness_exp.py --domains cleaned/Product
 
 # Run specific models only
-python experiments/robustness_exp.py --models bert tapas haetae navi
-python experiments/robustness_exp.py --models woSSI woMSM woESA
+python experiments/robustness_analysis/robustness_exp.py --models bert tapas haetae navi
+python experiments/robustness_analysis/robustness_exp.py --models woPER woMSM woESA woGHA woGHC
 ```
 
-Results are saved to `experiments/robustness_results/`:
+**Creating Schema Noise Datasets:**
+```bash
+# Create variant datasets with schema perturbations
+python experiments/robustness_analysis/create_schema_noise_datasets.py \
+    --domain Movie \
+    --synonym_map artifacts/schema_noise/synonym_map.json
+```
+
+Results are saved to `experiments/robustness_analysis/robustness_results/`:
 
 #### Segment Visualization
 ```bash
@@ -195,14 +272,14 @@ Results are saved to `experiments/robustness_results/`:
 ./experiments/run_segment_visualization.sh
 
 # Run individual steps
-python experiments/visualization_get_segment_embeddings.py \
+python experiments/visualization/get_segment_embeddings.py \
     --model_path ./models/navi_movie/epoch_2 \
     --output_path ./artifacts/segment_visualization/segments \
     --n_tables 6 \
     --rows_per_table 169 \
     --random_state 42
 
-python experiments/visualization_plot_segments.py \
+python experiments/visualization/plot_segments.py \
     --input ./artifacts/segment_visualization/segments/segments.json \
     --outdir ./artifacts/segment_visualization/plots \
     --model-name "Navi" \
@@ -218,5 +295,5 @@ python experiments/visualization_plot_segments.py \
 - **Masked Prediction**: Console output with accuracy scores
 - **Row Classification**: Console output with F1 scores
 - **Header Clustering**: `artifacts/lexvar/` directory
-- **Robustness Analysis**: `artifacts/structvar/` directory
+- **Robustness Analysis**: `experiments/robustness_analysis/robustness_results/` directory
 - **Segment Visualization**: `artifacts/segment_visualization/` directory

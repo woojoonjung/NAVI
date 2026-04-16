@@ -48,7 +48,7 @@ def load_jsonl(file_path):
             data.append(json.loads(line.strip()))
     return data
 
-def clean_table_data(json_data, tokenizer_name="bert-base-uncased", 
+def clean_table_data(json_data, tokenizer_name="pretrained/bert-base-uncased", 
                          max_tokens=500, max_indexed_fields=3, max_tokens_per_field=20):
     """
     Clean table data.
@@ -243,12 +243,12 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Train HAETAE with Masked Language Modeling")
     parser.add_argument("--data_path", type=str, required=True, help="Path to directory containing JSONL files")
     parser.add_argument("--output_dir", type=str, required=True, help="Directory to save model checkpoints")
-    parser.add_argument("--pretrained_model", type=str, default="bert-base-uncased", help="Pretrained model name or path")
+    parser.add_argument("--pretrained_model", type=str, default="pretrained/bert-base-uncased", help="Pretrained BERT model name or path (local dir preferred, e.g. pretrained/bert-base-uncased)")
     parser.add_argument("--max_length", type=int, default=512, help="Maximum sequence length")
     parser.add_argument("--batch_size", type=int, default=16, help="Batch size")
     parser.add_argument("--gradient_accumulation_steps", type=int, default=2, help="Number of gradient accumulation steps")
     parser.add_argument("--tables_per_batch", type=int, default=4, help="Number of tables to process simultaneously")
-    parser.add_argument("--num_epochs", type=int, default=2, help="Number of training epochs")
+    parser.add_argument("--num_epochs", type=int, default=3, help="Number of training epochs")
     parser.add_argument("--learning_rate", type=float, default=3e-5, help="Learning rate")
     parser.add_argument("--weight_decay", type=float, default=0.01, help="Weight decay")
     parser.add_argument("--warmup_steps", type=int, default=50, help="Number of warmup steps")
@@ -624,7 +624,7 @@ def run_validation(model, validation_dir, device, data_collator, args, step_samp
         return None
     
     # Clean and create validation dataset
-    processed_val_data = clean_table_data(val_data, tokenizer_name="bert-base-uncased")
+    processed_val_data = clean_table_data(val_data, tokenizer_name=args.pretrained_model)
     json_objects = [item[1] for item in processed_val_data]
     val_dataset = JSONDataset(
         path=None,
@@ -741,12 +741,10 @@ def main(args):
     print(" Initializing model...")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
-    # Initialize tokenizer
+    # Initialize tokenizer and config from pretrained path (local or Hub)
     tokenizer = BertTokenizer.from_pretrained(args.pretrained_model)
-
-    # Initialize model
     config = BertConfig.from_pretrained(args.pretrained_model)
-    model = HAETAE(config, tokenizer)
+    model = HAETAE(config, tokenizer, model_path=None, bert_pretrained_path=args.pretrained_model)
     model.to(device)
 
     # Data collator
@@ -875,6 +873,7 @@ def main(args):
                 args=args,
                 logger=logger,
                 global_step=global_step,
+                validation_dir=args.validation_dir,
             )
 
             if torch.cuda.is_available():

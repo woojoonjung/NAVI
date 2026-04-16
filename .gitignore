@@ -49,6 +49,7 @@ Thumbs.db
 
 # Data files
 data/
+docs/
 *.csv
 *.json
 *.jsonl
@@ -58,7 +59,12 @@ data/
 *.hdf5
 
 # Model files
+pretrained/
 models/
+mask_v1_movie_unsup/
+mask_v1_product_unsup/
+checkpoints/
+training_scripts/
 *.bin
 *.safetensors
 *.pt
@@ -75,9 +81,12 @@ plots/
 emb/
 segment_visualization/
 logs/
+*.tex
+*.txt
 markdowns/
 index/
 runs/
 catboost_info/
 
 *.log
+*.out

@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+import random
 from collections import defaultdict
 from config import Config
 
@@ -129,11 +130,24 @@ class EntropyAwareContrastiveLoss(nn.Module):
     - High-entropy headers: Row-conditioned anchor vs value embedding
     """
     
-    def __init__(self, model, low_entropy_tau=0.13, high_entropy_tau=0.07):
+    def __init__(self, model, low_entropy_tau=0.13, high_entropy_tau=0.07, routing_mode="entropy", random_seed=None):
         super().__init__()
         self.model = model
         self.low_entropy_tau = low_entropy_tau
         self.high_entropy_tau = high_entropy_tau
+        self.routing_mode = routing_mode
+        self.random_seed = random_seed
+
+        if self.routing_mode not in ("entropy", "all_low", "all_high", "random"):
+            raise ValueError(
+                f"Unsupported routing_mode={self.routing_mode!r}. "
+                "Choose from: entropy, all_low, all_high, random."
+            )
+
+        # ESA-internal routing ablation:
+        # - `woESA` removes alignment entirely (handled outside this loss).
+        # - `routing_mode` only changes how headers are assigned to low/high objectives.
+        print(f"EntropyAwareContrastiveLoss initialized with routing_mode={self.routing_mode}")
     
     def _norm(self, x, eps=1e-8):
         """L2 normalize embeddings."""
@@ -142,6 +156,59 @@ class EntropyAwareContrastiveLoss(nn.Module):
     def _sanitize(self, t):
         """Replace NaN values with 0."""
         return torch.nan_to_num(t, nan=0.0)
+
+    def _get_routed_sets(self, low_set, high_set, table_id=None):
+        """
+        Build routed header sets for ESA contrastive objectives.
+
+        This is an ESA-internal routing ablation: it remaps which eligible headers
+        are sent to the low-entropy vs high-entropy objectives.
+
+        Args:
+            low_set: set of eligible low-entropy headers for this table
+            high_set: set of eligible high-entropy headers for this table
+            table_id: optional table id (kept for deterministic extension; not required)
+        """
+        if self.routing_mode == "entropy":
+            # Backward compatible default: preserve original routing.
+            return low_set, high_set
+
+        union = set(low_set) | set(high_set)
+        if self.routing_mode == "all_low":
+            return union, set()
+        if self.routing_mode == "all_high":
+            return set(), union
+        if self.routing_mode == "random":
+            if len(union) == 0:
+                return set(), set()
+
+            # Deterministic order before shuffling avoids non-determinism from set iteration.
+            ordered = sorted(union)
+
+            rng = random.Random(self.random_seed) if self.random_seed is not None else random.Random()
+            rng.shuffle(ordered)
+
+            if len(ordered) == 1:
+                # Only one item: deterministic fallback to low_set.
+                return {ordered[0]}, set()
+
+            # Split while ensuring both groups are non-empty when possible.
+            cut = rng.randint(1, len(ordered) - 1)
+            low_routed = set(ordered[:cut])
+            high_routed = set(ordered[cut:])
+
+            # Defensive guarantees (should already hold with randint cut).
+            if len(low_routed) == 0 and len(high_routed) > 0:
+                low_routed = {ordered[0]}
+                high_routed.discard(ordered[0])
+            if len(high_routed) == 0 and len(low_routed) > 0:
+                high_routed = {ordered[-1]}
+                low_routed.discard(ordered[-1])
+
+            return low_routed, high_routed
+
+        # Should be unreachable due to __init__ validation.
+        raise RuntimeError(f"Unexpected routing_mode={self.routing_mode!r}")
 
     def _create_segment_embeddings(self, E_univ, H_ctx, V_ctx):
         """
@@ -352,6 +419,8 @@ class EntropyAwareContrastiveLoss(nn.Module):
             categories = field_categories[table_id]
             low_set = categories.get('low_entropy', set())
             high_set = categories.get('high_entropy', set())
+
+            low_set, high_set = self._get_routed_sets(low_set, high_set, table_id=table_id)
             
             if not low_set and not high_set:
                 continue
@@ -391,3 +460,10 @@ class EntropyAwareContrastiveLoss(nn.Module):
                 "high_entropy": high_loss_avg
             }
         return total_loss
+
+
+# Developer usage examples:
+# routing_mode="entropy"   (default; original behavior)
+# routing_mode="all_low"   (route all eligible headers to low objective)
+# routing_mode="all_high"  (route all eligible headers to high objective)
+# routing_mode="random"     (deterministically/randomly split eligible headers)

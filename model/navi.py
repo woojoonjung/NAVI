@@ -11,7 +11,7 @@ config = Config()
 
 # -----------------------------
 # Navi Model
-# Ablation for "woSSI" processed here
+# Ablation for "woGHA", "woGHC" processed here
 # -----------------------------
 
 class GlobalHeaderEncoder(nn.Module):
@@ -198,7 +198,7 @@ class NaviEmbeddings(nn.Module):
         else:
             header_embeddings = torch.zeros_like(input_embeddings)
 
-        if self.ablation_mode == "woSSI":
+        if self.ablation_mode == "woGHA":
             embeddings = input_embeddings + position_embeddings
         else:
             embeddings = input_embeddings + position_embeddings + header_embeddings
@@ -207,11 +207,32 @@ class NaviEmbeddings(nn.Module):
         return embeddings
 
 
+# class SegmentProjection(nn.Module):
+#     def __init__(self, hidden_size, dropout=0.1):
+#         super().__init__()
+#         self.projection = nn.Sequential(
+#             nn.Linear(hidden_size * 3, hidden_size * 2),
+#             nn.LayerNorm(hidden_size * 2),
+#             nn.GELU(),
+#             nn.Dropout(dropout),
+#             nn.Linear(hidden_size * 2, hidden_size),
+#             nn.LayerNorm(hidden_size)
+#         )
+    
+#     def forward(self, E_univ, H_ctx, V_ctx):
+#         B, H, D = E_univ.shape
+#         combined = torch.cat([E_univ, H_ctx, V_ctx], dim=-1)
+#         projected = self.projection(combined)
+#         return projected
+
 class SegmentProjection(nn.Module):
-    def __init__(self, hidden_size, dropout=0.1):
+    def __init__(self, hidden_size, dropout=0.1, ablation_mode="full"):
         super().__init__()
+        self.ablation_mode = ablation_mode
+        # woGHC: no E_univ in concat -> input dim 2*hidden_size; else 3*hidden_size
+        input_dim = hidden_size * 2 if ablation_mode == "woGHC" else hidden_size * 3
         self.projection = nn.Sequential(
-            nn.Linear(hidden_size * 3, hidden_size * 2),
+            nn.Linear(input_dim, hidden_size * 2),
             nn.LayerNorm(hidden_size * 2),
             nn.GELU(),
             nn.Dropout(dropout),
@@ -221,7 +242,10 @@ class SegmentProjection(nn.Module):
     
     def forward(self, E_univ, H_ctx, V_ctx):
         B, H, D = E_univ.shape
-        combined = torch.cat([E_univ, H_ctx, V_ctx], dim=-1)
+        if self.ablation_mode == "woGHC":
+            combined = torch.cat([H_ctx, V_ctx], dim=-1)
+        else:
+            combined = torch.cat([E_univ, H_ctx, V_ctx], dim=-1)
         projected = self.projection(combined)
         return projected
         
@@ -231,7 +255,8 @@ class NaviForMaskedLM(BertForMaskedLM):
     Navi Model - Header-Anchored pretraining for in-domain Tables Embedding
     Supports ablation via ablation_mode: 
     - "full": Complete model with all components
-    - "woSSI": w/o schema induction
+    - "woGHA": w/o global header addition
+    - "woGHC": w/o global header concatenation
     """
     def __init__(self, model_path=None, hidden_size=config.HIDDEN_SIZE, bert_name=config.BERT_NAME, ablation_mode="full", header_encoder_mode="full"):
         super().__init__(BertForMaskedLM.from_pretrained(bert_name).config)
@@ -244,7 +269,7 @@ class NaviForMaskedLM(BertForMaskedLM):
         self.header_encoder_mode = header_encoder_mode
         self.bert.embeddings = NaviEmbeddings(pretrained_bert.bert.embeddings, hidden_size, ablation_mode, header_encoder_mode)
 
-        self.segment_projection = SegmentProjection(hidden_size)
+        self.segment_projection = SegmentProjection(hidden_size, 0.1, ablation_mode)
 
         if model_path:
             state_dict = load_file(os.path.join(model_path, "model.safetensors"))

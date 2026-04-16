@@ -96,7 +96,7 @@ check_canonical_sets() {
 get_header_embeddings() {
     log "Step 1: Getting header embeddings..."
     
-    python experiments/domain_consistency_get_header_embeddings.py \
+    python experiments/header_clustering/get_header_embeddings.py \
         --data_dir "$DATA_DIR" \
         --artifacts_dir "$ARTIFACTS_DIR" \
         --domains "${DOMAINS[@]}" \
@@ -110,11 +110,11 @@ get_header_embeddings() {
     fi
 }
 
-# Step 2: Run domain consistency experiment
-run_domain_consistency_exp() {
-    log "Step 2: Running domain consistency experiment..."
+# Step 2: Run header clustering experiment
+run_header_clustering_exp() {
+    log "Step 2: Running header clustering experiment..."
     
-    python experiments/domain_consistency_exp.py \
+    python experiments/header_clustering/header_clustering.py \
         --artifacts_dir "$ARTIFACTS_DIR" \
         --domains "${DOMAINS[@]}" \
         --models "${MODELS[@]}"
@@ -173,7 +173,7 @@ main() {
     check_directories
     check_canonical_sets
     get_header_embeddings
-    run_domain_consistency_exp
+    run_header_clustering_exp
     
     log "=============================================="
     success "Domain Consistency Experiment Pipeline completed successfully!"

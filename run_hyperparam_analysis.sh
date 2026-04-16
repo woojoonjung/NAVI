@@ -1,18 +1,15 @@
 #!/bin/bash
 
-# Script to run hyperparameter analysis experiments
-# Runs masked_prediction, row_clustering, and row_classification
-# for align, ethresh, and tau variants
+# Run hyperparameter sweep experiments: all ./models/navi_{domain}* checkpoints.
+# Writes JSON logs per domain, then LaTeX + TXT summary tables (paired by RUN_ID).
 
-set -e  # Exit on error
+set -e
 
-# Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-# Function to print section headers
 print_section() {
     echo ""
     echo "=========================================="
@@ -21,63 +18,47 @@ print_section() {
     echo ""
 }
 
-# Function to run experiment with error handling
-run_experiment() {
-    local script=$1
-    local model_type=$2
-    local domain=$3
-    local embedding_type=${4:-"cls"}
-    
-    print_section "Running: $script --model $model_type --domain $domain"
-    
-    if [ "$script" = "experiments/row_clustering.py" ]; then
-        python "$script" --model "$model_type" --domain "$domain" --embedding_type "$embedding_type"
-    else
-        python "$script" --model "$model_type" --domain "$domain"
-    fi
-    
-    if [ $? -eq 0 ]; then
-        echo -e "${GREEN}✓ Successfully completed: $script --model $model_type --domain $domain${NC}"
-    else
-        echo -e "${RED}✗ Failed: $script --model $model_type --domain $domain${NC}"
-        exit 1
-    fi
-}
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$REPO_ROOT"
+export PYTHONPATH="${REPO_ROOT}${PYTHONPATH:+:$PYTHONPATH}"
 
-# Main execution
-print_section "Starting Hyperparameter Analysis Experiments"
+RUN_ID="${RUN_ID:-$(date +%Y%m%d_%H%M%S)}"
+export RUN_ID
+echo "Run ID (shared across JSON + tables): $RUN_ID"
 
-# Domains to evaluate
 DOMAINS=("Movie" "Product")
 
-# Step 1: Masked Prediction for all variants
-print_section "STEP 1: Masked Prediction Analysis"
+print_section "Starting Hyperparameter Analysis (all navi_{domain}* under ./models)"
+
+# print_section "STEP 1: Masked prediction"
+# for domain in "${DOMAINS[@]}"; do
+#     echo -e "${YELLOW}Processing $domain domain...${NC}"
+#     python experiments/masked_prediction/masked_prediction.py \
+#         --model hyperparam_sensitivity \
+#         --domain "$domain" \
+#         --max_loaded_variants 4 \
+#         --run_id "$RUN_ID"
+#     echo -e "${GREEN}✓ Masked prediction completed for $domain${NC}"
+# done
+
+print_section "STEP 2: Row classification"
 for domain in "${DOMAINS[@]}"; do
     echo -e "${YELLOW}Processing $domain domain...${NC}"
-    # Use hyperparam_sensitivity which includes align, ethresh, and tau variants
-    run_experiment "experiments/masked_prediction.py" "hyperparam_sensitivity" "$domain"
+    python experiments/downstream_tasks/row_classification.py \
+        --mode hyperparam_sensitivity \
+        --domain "$domain" \
+        --embedding_type cls \
+        --max_loaded_variants 4 \
+        --run_id "$RUN_ID"
+    echo -e "${GREEN}✓ Row classification completed for $domain${NC}"
 done
 
-# Step 2: Row Clustering for all variants
-print_section "STEP 2: Row Clustering Analysis"
-for domain in "${DOMAINS[@]}"; do
-    echo -e "${YELLOW}Processing $domain domain...${NC}"
-    # Use hyperparam_sensitivity which includes align, ethresh, and tau variants
-    run_experiment "experiments/row_clustering.py" "hyperparam_sensitivity" "$domain" "cls"
-done
+print_section "STEP 3: LaTeX + TXT tables"
+python experiments/export_hyperparam_tables.py --run_id "$RUN_ID"
 
-# Step 3: Row Classification for all variants
-print_section "STEP 3: Row Classification Analysis"
-for domain in "${DOMAINS[@]}"; do
-    echo -e "${YELLOW}Processing $domain domain...${NC}"
-    # Use hyperparam_sensitivity which includes align, ethresh, and tau variants
-    run_experiment "experiments/row_classification.py" "hyperparam_sensitivity" "$domain" "cls"
-done
-
-print_section "All Experiments Completed Successfully!"
-echo -e "${GREEN}✓ All hyperparameter analysis experiments finished${NC}"
+print_section "All experiments completed"
+echo -e "${GREEN}✓ Hyperparameter analysis finished${NC}"
 echo ""
-echo "Results saved in:"
-echo "  - experiments/logs/masked_prediction_hyperparam_sensitivity_*.json"
-echo "  - experiments/logs/row_clustering_hyperparam_sensitivity_*.json"
-echo "  - experiments/logs/row_classification_hyperparam_sensitivity_*.json"
+echo "JSON logs: experiments/logs/*_${RUN_ID}.json"
+echo "Tables:    experiments/logs/hyperparam_tables_${RUN_ID}_masked_prediction.{tex,txt}"
+echo "           experiments/logs/hyperparam_tables_${RUN_ID}_row_classification.{tex,txt}"

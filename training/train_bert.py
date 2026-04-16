@@ -93,10 +93,10 @@ def parse_args():
     parser.add_argument("--output_dir", type=str, required=True, help="Directory to save model checkpoints")
     parser.add_argument("--pretrained_model", type=str, default="bert-base-uncased", help="Pretrained model name or path")
     parser.add_argument("--max_length", type=int, default=512, help="Maximum sequence length")
-    parser.add_argument("--batch_size", type=int, default=16, help="Batch size")
-    parser.add_argument("--gradient_accumulation_steps", type=int, default=2, help="Number of gradient accumulation steps")
+    parser.add_argument("--batch_size", type=int, default=32, help="Batch size")
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=1, help="Number of gradient accumulation steps")
     parser.add_argument("--tables_per_batch", type=int, default=4, help="Number of tables to process simultaneously")
-    parser.add_argument("--num_epochs", type=int, default=2, help="Number of training epochs")
+    parser.add_argument("--num_epochs", type=int, default=3, help="Number of training epochs")
     parser.add_argument("--learning_rate", type=float, default=3e-5, help="Learning rate")
     parser.add_argument("--weight_decay", type=float, default=0.01, help="Weight decay")
     parser.add_argument("--warmup_steps", type=int, default=50, help="Number of warmup steps")
@@ -546,11 +546,11 @@ def main(args):
     print(" Initializing model...")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
-    # Initialize tokenizer
-    tokenizer = BertTokenizer.from_pretrained(args.pretrained_model)
+    # Initialize tokenizer from local pretrained checkpoint
+    tokenizer = BertTokenizer.from_pretrained("pretrained/bert-base-uncased")
 
-    # Initialize model
-    model = BertForMaskedLM.from_pretrained(args.pretrained_model)
+    # Initialize model from local pretrained checkpoint
+    model = BertForMaskedLM.from_pretrained("pretrained/bert-base-uncased")
     model.to(device)
 
     # Data collator

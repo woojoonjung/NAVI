@@ -28,6 +28,58 @@ from model.loss import (
     extract_header_value_embeddings
 )
 
+def get_torch_and_env_info():
+    """Return a JSON-serializable dict of PyTorch and environment settings."""
+    info = {
+        "torch_version": str(torch.__version__),
+        "cuda_available": bool(torch.cuda.is_available()),
+        "cuda_device_count": int(torch.cuda.device_count()) if torch.cuda.is_available() else 0,
+    }
+    if torch.cuda.is_available():
+        info["cuda_version"] = str(torch.version.cuda) if hasattr(torch.version, "cuda") else None
+        info["cuDNN_version"] = str(torch.backends.cudnn.version()) if torch.backends.cudnn.is_available() else None
+        try:
+            info["device_name"] = str(torch.cuda.get_device_name(0))
+        except Exception:
+            info["device_name"] = None
+    else:
+        info["cuda_version"] = None
+        info["cuDNN_version"] = None
+        info["device_name"] = None
+    import sys
+    info["python_version"] = str(sys.version.split()[0]) if sys.version else None
+    return info
+
+
+def args_to_hyperparameters_dict(args):
+    """Convert argparse Namespace to a JSON-serializable dict of all hyperparameters."""
+    d = {}
+    for k in vars(args):
+        v = getattr(args, k)
+        if isinstance(v, (int, float, str, bool, type(None))):
+            d[k] = v
+        elif isinstance(v, (list, tuple)):
+            d[k] = list(v)
+        else:
+            d[k] = str(v)
+    return d
+
+
+def get_config_snapshot():
+    """Return a JSON-serializable snapshot of config used for training."""
+    return {
+        "MAX_SEQ_LENGTH": getattr(config, "MAX_SEQ_LENGTH", None),
+        "HIDDEN_SIZE": getattr(config, "HIDDEN_SIZE", None),
+        "NUM_ENCODER_LAYERS": getattr(config, "NUM_ENCODER_LAYERS", None),
+        "NUM_ATTENTION_HEADS": getattr(config, "NUM_ATTENTION_HEADS", None),
+        "DROPOUT_RATE": getattr(config, "DROPOUT_RATE", None),
+        "CHECKPOINT_EPOCH": getattr(config, "CHECKPOINT_EPOCH", None),
+        "BERT_NAME": getattr(config, "BERT_NAME", None),
+        "TAPAS_NAME": getattr(config, "TAPAS_NAME", None),
+        "DEVICE": str(getattr(config, "DEVICE", None)),
+    }
+
+
 # Move these functions to the top level (outside of any other function)
 def count_lines(file_path):
     try:
@@ -125,22 +177,29 @@ def parse_args():
                        choices=['HV', 'B', 'HVB'],
                        help="Masking strategy to use")
     parser.add_argument("--ablation_type", type=str, required=True,
-                       choices=['full', 'woESA', 'woSSI', "woMSM"],
-                       help="Ablation type to use")
-    parser.add_argument("--batch_size", type=int, default=16, help="Batch size")
-    parser.add_argument("--gradient_accumulation_steps", type=int, default=2, help="Number of gradient accumulation steps")
+                       choices=['full', 'woESA', 'woSSI', 'woMSM', 'woGHA', 'woGHC'],
+                       help="Ablation type: woSSI (dataset segment IDs), woGHA/woGHC (model), woESA/woMSM (training)")
+    parser.add_argument("--batch_size", type=int, default=32, help="Batch size")
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=1, help="Number of gradient accumulation steps")
     parser.add_argument("--tables_per_batch", type=int, default=4, help="Number of tables to process simultaneously")
-    parser.add_argument("--num_epochs", type=int, default=2, help="Number of training epochs")
+    parser.add_argument("--num_epochs", type=int, default=3, help="Number of training epochs")
     parser.add_argument("--learning_rate", type=float, default=3e-5, help="Learning rate")
     parser.add_argument("--weight_decay", type=float, default=0.01, help="Weight decay")
     parser.add_argument("--warmup_steps", type=int, default=50, help="Number of warmup steps")
     parser.add_argument("--max_grad_norm", type=float, default=1.0, help="Max gradient norm for clipping")
     parser.add_argument("--log_steps", type=int, default=100, help="Evaluate every N steps")
     parser.add_argument("--hv_weight", type=float, default=0.5, help="Weight for header-value masking in HVB strategy")
-    parser.add_argument("--alignment_weight", type=float, default=0.15, help="Weight for alignment loss")
+    parser.add_argument("--alignment_weight", type=float, default=0.05, help="Weight for alignment loss")
     parser.add_argument("--value_ratio", type=float, default=0.5, help="Ratio of value segments to header segments for HV masking")
-    parser.add_argument("--low_entropy_tau", type=float, default=0.13, help="Temperature parameter for low entropy contrastive loss")
-    parser.add_argument("--high_entropy_tau", type=float, default=0.07, help="Temperature parameter for high entropy contrastive loss")
+    parser.add_argument("--low_entropy_tau", type=float, default=0.1, help="Temperature parameter for low entropy contrastive loss")
+    parser.add_argument("--high_entropy_tau", type=float, default=0.02, help="Temperature parameter for high entropy contrastive loss")
+    parser.add_argument(
+        "--esa_routing_mode",
+        type=str,
+        default=getattr(config, "ESA_ROUTING_MODE", "entropy"),
+        choices=["entropy", "all_low", "all_high", "random"],
+        help="ESA-internal routing ablation mode (how headers are routed to low/high objectives).",
+    )
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
     parser.add_argument("--validation_dir", type=str, default=None, help="Path to validation data directory (optional)")
     parser.add_argument("--data_type", type=str, default="cleaned", choices=["raw", "cleaned"], help="Data type used for training (for model naming)")
@@ -149,15 +208,17 @@ def parse_args():
     parser.add_argument("--entropy_threshold_method", type=str, default="quartile", 
                        choices=["quartile", "percentile"], 
                        help="Method for calculating entropy thresholds (default: quartile)")
-    parser.add_argument("--low_threshold_percentile", type=int, default=25, 
+    parser.add_argument("--low_threshold_percentile", type=int, default=10, 
                        help="Low threshold percentile for entropy categorization (default: 25)")
-    parser.add_argument("--high_threshold_percentile", type=int, default=75, 
+    parser.add_argument("--high_threshold_percentile", type=int, default=90, 
                        help="High threshold percentile for entropy categorization (default: 75)")
     parser.add_argument("--validation_sample_ratio", type=float, default=1.0,
                        help="Ratio of validation data to use (1.0 = full dataset, default: 1.0)")
     parser.add_argument("--header_encoder_mode", type=str, default="full",
                        choices=["full", "frozen", "partial"],
                        help="Header encoder training mode: full (all trainable), frozen (all frozen), partial (only layer_2 trainable)")
+    parser.add_argument("--bert_name", type=str, default=None,
+                       help="Override BERT checkpoint path (default: config.BERT_NAME). Use to match January/B200 run exactly.")
     
     return parser.parse_args()
 
@@ -175,8 +236,11 @@ def get_stage_config(masking_strategy, ablation_type):
         raise ValueError(f"Unknown masking strategy: {masking_strategy}")
 
 class LossLogger:
-    """Logger for tracking training metrics in a structured format."""
-    def __init__(self, output_dir, ablation_type, masking_strategy, seed=None, data_type="cleaned", 
+    """Logger for tracking training metrics in a structured format.
+    Metrics file is always training_metrics.json; full hyperparameters and torch/env
+    are stored under training_info via set_full_hyperparameters().
+    """
+    def __init__(self, output_dir, ablation_type, masking_strategy, seed=None, data_type="cleaned",
                  low_entropy_tau=None, high_entropy_tau=None, entropy_threshold_method=None):
         self.output_dir = output_dir
         os.makedirs(self.output_dir, exist_ok=True)
@@ -187,20 +251,7 @@ class LossLogger:
         self.low_entropy_tau = low_entropy_tau
         self.high_entropy_tau = high_entropy_tau
         self.entropy_threshold_method = entropy_threshold_method
-        
-        # Build model identifier for file naming
-        model_id_parts = [ablation_type, masking_strategy]
-        if seed is not None:
-            model_id_parts.append(f"seed{seed}")
-        if data_type:
-            model_id_parts.append(data_type)
-        if low_entropy_tau is not None and high_entropy_tau is not None:
-            model_id_parts.append(f"tau{high_entropy_tau}_{low_entropy_tau}")
-        if entropy_threshold_method:
-            model_id_parts.append(entropy_threshold_method)
-        
-        model_id = "_".join(model_id_parts)
-        
+
         self.metrics = {
             'training_info': {
                 'ablation_type': ablation_type,
@@ -214,12 +265,29 @@ class LossLogger:
                 'epochs': [],
                 'validation': [],
                 'compute_metrics': {},
-                'dataset_stats': {}
+                'dataset_stats': {},
+                'hyperparameters': {},
+                'torch_and_env': get_torch_and_env_info(),
             },
-            'steps': [] 
+            'steps': []
         }
-        self.metrics_file = os.path.join(output_dir, f"training_metrics_{model_id}.json")
-        self.plot_file = os.path.join(output_dir, f"learning_curve_{model_id}.png")
+        self.metrics_file = os.path.join(output_dir, "training_metrics.json")
+        self.plot_file = os.path.join(output_dir, "learning_curve.png")
+
+    def set_full_hyperparameters(self, args, bert_name_used=None, total_parameters=None,
+                                 trainable_parameters=None, frozen_parameters=None):
+        """Store all CLI hyperparameters, config snapshot, torch/env, and model info in training_info."""
+        self.metrics['training_info']['hyperparameters'] = args_to_hyperparameters_dict(args)
+        self.metrics['training_info']['config_snapshot'] = get_config_snapshot()
+        self.metrics['training_info']['torch_and_env'] = get_torch_and_env_info()
+        if bert_name_used is not None:
+            self.metrics['training_info']['bert_name_used'] = str(bert_name_used)
+        if total_parameters is not None:
+            self.metrics['training_info']['total_parameters'] = int(total_parameters)
+        if trainable_parameters is not None:
+            self.metrics['training_info']['trainable_parameters'] = int(trainable_parameters)
+        if frozen_parameters is not None:
+            self.metrics['training_info']['frozen_parameters'] = int(frozen_parameters)
 
     def log_epoch(self, epoch, epoch_metrics, stage_info, current_strategy):
         epoch_data = {
@@ -491,6 +559,7 @@ def train_atlas(
     field_categories=None,
     validation_dir=None,
     stage_config=None,
+    tokenizer_name=None,
 ):
     model.train()
     collator.set_epoch(epoch)
@@ -674,7 +743,8 @@ def train_atlas(
                 )
                 val_metrics = run_validation(
                     model, validation_dir, device, loss_fns, val_collator, 
-                    ablation_type, args, step_sample_ratio=0.2  # Randomly sample 20% for validation
+                    ablation_type, args, step_sample_ratio=0.2,  # Randomly sample 20% for validation
+                    tokenizer_name=tokenizer_name
                 )
                 if val_metrics:
                     logger.log_validation_step(global_step, val_metrics)
@@ -727,14 +797,17 @@ def train_atlas(
     
     return global_step
 
-def run_validation(model, validation_dir, device, loss_fns, collator, ablation_type, args, step_sample_ratio=0.2):
+def run_validation(model, validation_dir, device, loss_fns, collator, ablation_type, args, step_sample_ratio=0.2, tokenizer_name=None):
     """
     Run validation on validation dataset.
     Returns validation metrics including losses and optionally other metrics.
     
     Args:
         step_sample_ratio: Ratio to sample validation data (default: 0.2 for 20%)
+        tokenizer_name: BERT/tokenizer path for NaviDataset (default: config.BERT_NAME)
     """
+    if tokenizer_name is None:
+        tokenizer_name = config.BERT_NAME
     if validation_dir is None or not os.path.exists(validation_dir):
         return None
     
@@ -752,12 +825,12 @@ def run_validation(model, validation_dir, device, loss_fns, collator, ablation_t
         print("⚠️ No validation files found")
         return None
     
-    # Load validation data - load all data first, then randomly sample
+    # Load validation data - use (table_id, row) with unique table_id per file for field entropy
     val_data = []
-    for val_file in val_files:
+    for file_idx, val_file in enumerate(val_files):
         try:
             data = load_jsonl(val_file)
-            val_data.extend([(0, row) for row in data])
+            val_data.extend([(file_idx, row) for row in data])
         except Exception as e:
             print(f"⚠️ Error loading {val_file}: {e}")
             continue
@@ -773,14 +846,18 @@ def run_validation(model, validation_dir, device, loss_fns, collator, ablation_t
         print("⚠️ No validation data loaded")
         return None
     
-    # Create validation dataset
+    # Create validation dataset with field entropy so we can compute entropy losses correctly
     val_dataset = NaviDataset(
         val_data,
-        tokenizer_name=config.BERT_NAME,
+        tokenizer_name=tokenizer_name,
         max_length=config.MAX_SEQ_LENGTH,
         ablation_mode=ablation_type,
-        compute_field_entropy=False
+        compute_field_entropy=True,
+        entropy_threshold_method=args.entropy_threshold_method,
+        low_threshold_percentile=args.low_threshold_percentile,
+        high_threshold_percentile=args.high_threshold_percentile,
     )
+    field_categories = val_dataset.get_field_categories()
     
     val_dataloader = DataLoader(
         val_dataset,
@@ -847,15 +924,13 @@ def run_validation(model, validation_dir, device, loss_fns, collator, ablation_t
                 high_entropy_loss = None
                 if ablation_type != "woESA":
                     table_ids = batch.get("table_ids")
-                    # For validation, we don't compute field entropy, so field_categories is None
-                    # The loss function should handle this gracefully
                     entropy_loss_result = loss_fns["entropy_loss"](
                         E_univ=header_anchor_embeds,
                         H_ctx=header_embeds,
                         V_ctx=val_embeds,
                         header_strings=header_strings,
                         table_ids=table_ids,
-                        field_categories=None,  # Validation doesn't use field categories
+                        field_categories=field_categories,
                         return_dict=True
                     )
                     
@@ -986,11 +1061,15 @@ def main(args):
     total_epochs = args.num_epochs
     num_files = len(jsonl_files)
 
+    bert_name = args.bert_name if getattr(args, 'bert_name', None) else config.BERT_NAME
     print("🚀 Initializing model...")
+    print(f"   BERT checkpoint: {bert_name}")
     device = torch.device(config.DEVICE)
+    # woSSI is dataset-only; woESA/woMSM are training-only. Model ablation is only full, woGHA, woGHC.
+    model_ablation_mode = ablation_type if ablation_type in ('full', 'woGHA', 'woGHC') else 'full'
     model = NaviForMaskedLM(
-        bert_name=config.BERT_NAME,
-        ablation_mode=ablation_type,
+        bert_name=bert_name,
+        ablation_mode=model_ablation_mode,
         header_encoder_mode=args.header_encoder_mode
     ).to(device)
     
@@ -1003,7 +1082,13 @@ def main(args):
 
     loss_fns = {
         "mlm_loss": MLMLoss(),
-        "entropy_loss": EntropyAwareContrastiveLoss(model, low_entropy_tau=args.low_entropy_tau, high_entropy_tau=args.high_entropy_tau)
+        "entropy_loss": EntropyAwareContrastiveLoss(
+            model,
+            low_entropy_tau=args.low_entropy_tau,
+            high_entropy_tau=args.high_entropy_tau,
+            routing_mode=args.esa_routing_mode,
+            random_seed=args.seed,
+        )
     }
 
     # Filter out frozen parameters from optimizer
@@ -1022,7 +1107,7 @@ def main(args):
         try:
             combined_dataset = create_combined_dataset(
                 file_group, 
-                config.BERT_NAME, 
+                bert_name, 
                 config.MAX_SEQ_LENGTH, 
                 ablation_type,
                 compute_field_entropy=False,  # Skip entropy computation for batch length estimation
@@ -1060,12 +1145,14 @@ def main(args):
         entropy_threshold_method=args.entropy_threshold_method
     )
     
-    # Log header encoder mode and parameter counts (ensure JSON serializable)
-    logger.metrics['training_info']['header_encoder_mode'] = args.header_encoder_mode
-    logger.metrics['training_info']['total_parameters'] = int(total_params)
-    logger.metrics['training_info']['trainable_parameters'] = int(trainable_params_count)
-    logger.metrics['training_info']['frozen_parameters'] = int(frozen_params)
-    
+    # Store all hyperparameters and torch/env in training_info (single source of truth)
+    logger.set_full_hyperparameters(
+        args,
+        bert_name_used=bert_name,
+        total_parameters=total_params,
+        trainable_parameters=trainable_params_count,
+        frozen_parameters=frozen_params,
+    )
     # Log dataset statistics
     logger.metrics['training_info']['dataset_stats'] = dataset_stats
     
@@ -1124,7 +1211,7 @@ def main(args):
             # Create combined dataset from multiple files
             combined_dataset = create_combined_dataset(
                 group_files,
-                tokenizer_name=config.BERT_NAME,
+                tokenizer_name=bert_name,
                 max_length=config.MAX_SEQ_LENGTH,
                 ablation_mode=ablation_type,
                 compute_field_entropy=True,
@@ -1176,6 +1263,7 @@ def main(args):
                 field_categories=field_categories,
                 validation_dir=args.validation_dir if hasattr(args, 'validation_dir') else None,
                 stage_config=stage_config,
+                tokenizer_name=bert_name,
             )
 
             if torch.cuda.is_available():
@@ -1187,20 +1275,8 @@ def main(args):
         # Note: Validation is only performed at step intervals (every 1000 steps) during training
         # No epoch-based validation is performed
         
-        # Save checkpoint after each epoch
-        # Update model save path to include seed and data type
-        model_name_parts = [ablation_type, masking_strategy]
-        if args.seed is not None:
-            model_name_parts.append(f"seed{args.seed}")
-        if args.data_type:
-            model_name_parts.append(args.data_type)
-        if args.low_entropy_tau is not None and args.high_entropy_tau is not None:
-            model_name_parts.append(f"tau{args.high_entropy_tau}_{args.low_entropy_tau}")
-        if args.entropy_threshold_method:
-            model_name_parts.append(args.entropy_threshold_method)
-        
-        model_name = "_".join(model_name_parts)
-        epoch_checkpoint_path = os.path.join(args.output_dir, f"{model_name}_epoch_{epoch + 1}")
+        # Save checkpoint after each epoch (simple name: epoch_1, epoch_2, ...)
+        epoch_checkpoint_path = os.path.join(args.output_dir, f"epoch_{epoch + 1}")
         model.save_pretrained(epoch_checkpoint_path)
         print(f"💾 Epoch {epoch + 1} checkpoint saved: {epoch_checkpoint_path}")
     
@@ -1243,8 +1319,8 @@ def main(args):
     # Plot learning curve at the end
     logger.plot_learning_curve(smoothing=0.1)
     
-    # Final model save (same as last checkpoint, but kept for consistency)
-    final_save_path = os.path.join(args.output_dir, f"{model_name}_epoch_{total_epochs}")
+    # Final model save (same as last epoch checkpoint)
+    final_save_path = os.path.join(args.output_dir, f"epoch_{total_epochs}")
     if not os.path.exists(final_save_path):
         model.save_pretrained(final_save_path)
         print(f"💾 Final model saved: {final_save_path}")

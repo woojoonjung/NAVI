@@ -7,12 +7,13 @@ from safetensors.torch import load_file
 
 
 class HAETAE(BertForMaskedLM):
-    def __init__(self, config, tokenizer, model_path=None):
+    def __init__(self, config, tokenizer, model_path=None, bert_pretrained_path=None):
         """
         Args:
             config (BertConfig): Configuration for the BERT model.
             tokenizer: Tokenizer for the model.
-            model_path (str, optional): Path to pre-trained model weights.
+            model_path (str, optional): Path to pre-trained HAETAE/JSONBERT weights (safetensors).
+            bert_pretrained_path (str, optional): Path to base BERT checkpoint (e.g. pretrained/bert-base-uncased). If None, uses "bert-base-uncased" (HuggingFace Hub).
         """
         super(HAETAE, self).__init__(config)
         self.tokenizer = tokenizer
@@ -38,8 +39,10 @@ class HAETAE(BertForMaskedLM):
             # self.load_state_dict(state_dict, strict=False)
             print(f"Pre-trained JSONBERT loaded from {model_path}")
         else:
-            # Load base BERT weights
-            pretrained_bert = BertForMaskedLM.from_pretrained("bert-base-uncased")
+            # Load base BERT weights from local path or HuggingFace Hub
+            load_path = bert_pretrained_path if bert_pretrained_path else "bert-base-uncased"
+            print(f"Loading base BERT from {load_path}")
+            pretrained_bert = BertForMaskedLM.from_pretrained(load_path)
             self.bert = pretrained_bert.bert
             self.cls = pretrained_bert.cls
             # Clone word embeddings to initialize key_embedding

@@ -1393,13 +1393,13 @@ def main():
     parser.add_argument(
         "--raw_movie_dir",
         type=str,
-        default="data/raw/Movie_top100",
+        default="/home/work/Tabular-Embedding/data_corruption_debug/uploaded_unzipped_to_server/Movie_top100",
         help="Raw Movie dataset directory",
     )
     parser.add_argument(
         "--raw_product_dir",
         type=str,
-        default="data/raw/Product_top100",
+        default="/home/work/Tabular-Embedding/data_corruption_debug/uploaded_unzipped_to_server/Product_top100",
         help="Raw Product dataset directory",
     )
     parser.add_argument(

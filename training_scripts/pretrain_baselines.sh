@@ -52,8 +52,8 @@ DEFAULT_VALUE_RATIO="${DEFAULT_VALUE_RATIO:-0.5}"
 DEFAULT_LOW_ENTROPY_TAU="${DEFAULT_LOW_ENTROPY_TAU:-0.1}"
 DEFAULT_HIGH_ENTROPY_TAU="${DEFAULT_HIGH_ENTROPY_TAU:-0.02}"
 DEFAULT_ENTROPY_THRESHOLD_METHOD="${DEFAULT_ENTROPY_THRESHOLD_METHOD:-percentile}"
-DEFAULT_LOW_THRESHOLD_PERCENTILE="${DEFAULT_LOW_THRESHOLD_PERCENTILE:-10}"
-DEFAULT_HIGH_THRESHOLD_PERCENTILE="${DEFAULT_HIGH_THRESHOLD_PERCENTILE:-90}"
+DEFAULT_LOW_THRESHOLD_PERCENTILE="${DEFAULT_LOW_THRESHOLD_PERCENTILE:-25}"
+DEFAULT_HIGH_THRESHOLD_PERCENTILE="${DEFAULT_HIGH_THRESHOLD_PERCENTILE:-75}"
 
 # Create necessary directories
 mkdir -p logs
@@ -176,7 +176,7 @@ train_navi() {
         --gradient_accumulation_steps "${DEFAULT_GRADIENT_ACCUMULATION_STEPS}" \
         --tables_per_batch "${DEFAULT_TABLES_PER_BATCH}" \
         --num_epochs 2 \
-        --learning_rate 3e-5 \
+        --learning_rate 2e-5 \
         --weight_decay 0.01 \
         --warmup_steps 50 \
         --max_grad_norm 1.0 \
@@ -200,17 +200,17 @@ echo "=========================================="
 # Get start time
 START_TIME=$(date +%s)
 
-# Train NAVI for all datasets
-echo "Training NAVI models..."
-for dataset in "${DATASET_LIST[@]}"; do
-    train_navi "$dataset"
-done
+# # Train NAVI for all datasets
+# echo "Training NAVI models..."
+# for dataset in "${DATASET_LIST[@]}"; do
+#     train_navi "$dataset"
+# done
 
 # Train BERT for all datasets
-echo "Training BERT models..."
-for dataset in "${DATASET_LIST[@]}"; do
-    train_bert "$dataset"
-done
+# echo "Training BERT models..."
+# for dataset in "${DATASET_LIST[@]}"; do
+#     train_bert "$dataset"
+# done
 
 # Train HAETAE for all datasets
 echo "Training HAETAE models..."
