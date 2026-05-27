@@ -595,7 +595,7 @@ def run_row_classification_tabpfn(X, y, test_size=0.2):
     try:
         import torch
         tabpfn_device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        clf = TabPFNClassifier(device=tabpfn_device)
+        clf = TabPFNClassifier(device=tabpfn_device, model_path="tabpfn-v3-classifier-v3_20260417_multiclass.ckpt")
         clf.fit(X_train, y_train)
         y_pred = clf.predict(X_test)
         f1 = f1_score(y_test, y_pred, average='macro')

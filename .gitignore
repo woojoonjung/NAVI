@@ -83,6 +83,7 @@ segment_visualization/
 logs/
 *.tex
 *.txt
+*.png
 markdowns/
 index/
 runs/

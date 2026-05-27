@@ -242,6 +242,44 @@ def create_actor_clustering_visualization(df: pd.DataFrame, mapper, model_name: 
     plt.close(fig)
 
 
+def compute_intra_group_distances(df: pd.DataFrame, nested_map: dict) -> dict:
+    """
+    Average pairwise L2 and cosine distance within each canonical group across all canonical sets.
+
+    For each canonical group with ≥2 members present in df, compute all pairwise distances,
+    average within the group, then macro-average across groups.
+    Returns keys: mean_intra_L2, mean_intra_cosine_dist.
+    """
+    from sklearn.metrics.pairwise import cosine_distances, euclidean_distances
+
+    raw_to_canonical = flatten_nested_canonical_map(nested_map)
+    df = df.copy()
+    df["canonical"] = df["header"].map(raw_to_canonical)
+    df = df.dropna(subset=["canonical"])
+
+    group_l2: list[float] = []
+    group_cos: list[float] = []
+
+    for canonical, group_df in df.groupby("canonical"):
+        if len(group_df) < 2:
+            continue
+        X = np.stack(group_df["embed"].values)
+        l2_mat = euclidean_distances(X)
+        cos_mat = cosine_distances(X)
+        n = len(X)
+        triu_idx = np.triu_indices(n, k=1)
+        group_l2.append(float(l2_mat[triu_idx].mean()))
+        group_cos.append(float(cos_mat[triu_idx].mean()))
+
+    if not group_l2:
+        return {"mean_intra_L2": float("nan"), "mean_intra_cosine_dist": float("nan")}
+
+    return {
+        "mean_intra_L2": float(np.mean(group_l2)),
+        "mean_intra_cosine_dist": float(np.mean(group_cos)),
+    }
+
+
 def run_clustering_experiment(domain: str, model_name: str, artifacts_dir: Path, ablation_mode: bool = False):
     logging.info(f"Starting Clustering experiment for domain='{domain}', model='{model_name}', ablation_mode={ablation_mode}")
     
@@ -303,6 +341,7 @@ def run_clustering_experiment(domain: str, model_name: str, artifacts_dir: Path,
         'DaviesBouldin': davies
     }
     results.update(compute_actor_fig3_metrics(df, nested_map, domain))
+    results.update(compute_intra_group_distances(df, nested_map))
 
     logging.info(f"Clustering Results for {model_name} on {domain}: {results}")
     

@@ -10,7 +10,9 @@ This script follows the exact 5-step workflow:
 5. Clean the remaining training datasets
 
 Usage:
-    python preprocess.py
+    python dataset/preprocess.py
+
+Raw inputs default to data/raw/Movie_top100 and data/raw/Product_top100.
 """
 
 import json
@@ -1390,17 +1392,18 @@ def main():
     parser = argparse.ArgumentParser(
         description="Unified preprocessing pipeline for NAVI dataset"
     )
+    _repo_root = Path(__file__).resolve().parents[1]
     parser.add_argument(
         "--raw_movie_dir",
         type=str,
-        default="/home/work/Tabular-Embedding/data_corruption_debug/uploaded_unzipped_to_server/Movie_top100",
-        help="Raw Movie dataset directory",
+        default=str(_repo_root / "data" / "raw" / "Movie_top100"),
+        help="Raw Movie dataset directory (default: data/raw/Movie_top100)",
     )
     parser.add_argument(
         "--raw_product_dir",
         type=str,
-        default="/home/work/Tabular-Embedding/data_corruption_debug/uploaded_unzipped_to_server/Product_top100",
-        help="Raw Product dataset directory",
+        default=str(_repo_root / "data" / "raw" / "Product_top100"),
+        help="Raw Product dataset directory (default: data/raw/Product_top100)",
     )
     parser.add_argument(
         "--flattened_movie_dir",

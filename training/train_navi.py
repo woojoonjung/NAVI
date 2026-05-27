@@ -189,7 +189,7 @@ def parse_args():
     parser.add_argument("--max_grad_norm", type=float, default=1.0, help="Max gradient norm for clipping")
     parser.add_argument("--log_steps", type=int, default=100, help="Evaluate every N steps")
     parser.add_argument("--hv_weight", type=float, default=0.5, help="Weight for header-value masking in HVB strategy")
-    parser.add_argument("--alignment_weight", type=float, default=0.05, help="Weight for alignment loss")
+    parser.add_argument("--alignment_weight", type=float, default=0.0125, help="Weight for alignment loss")
     parser.add_argument("--value_ratio", type=float, default=0.5, help="Ratio of value segments to header segments for HV masking")
     parser.add_argument("--low_entropy_tau", type=float, default=0.1, help="Temperature parameter for low entropy contrastive loss")
     parser.add_argument("--high_entropy_tau", type=float, default=0.02, help="Temperature parameter for high entropy contrastive loss")
@@ -208,9 +208,9 @@ def parse_args():
     parser.add_argument("--entropy_threshold_method", type=str, default="quartile", 
                        choices=["quartile", "percentile"], 
                        help="Method for calculating entropy thresholds (default: quartile)")
-    parser.add_argument("--low_threshold_percentile", type=int, default=10, 
+    parser.add_argument("--low_threshold_percentile", type=int, default=5, 
                        help="Low threshold percentile for entropy categorization (default: 25)")
-    parser.add_argument("--high_threshold_percentile", type=int, default=90, 
+    parser.add_argument("--high_threshold_percentile", type=int, default=95, 
                        help="High threshold percentile for entropy categorization (default: 75)")
     parser.add_argument("--validation_sample_ratio", type=float, default=1.0,
                        help="Ratio of validation data to use (1.0 = full dataset, default: 1.0)")

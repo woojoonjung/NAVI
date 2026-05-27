@@ -13,6 +13,104 @@
 </h3>
 </div>
 
+This fork uses the same CM2 code under `baselines/CM2/` for **pMTM pretraining** on WDC Movie/Product tables and for **downstream comparison** with NAVI (`experiments/navi_cm2.sh`). Use the **`CM2` conda environment** (see root `environment.yml` / install below) for CM2 training and for `experiments/navi_cm2.sh`.
+
+### 1. Export cleaned JSONL to CM2 CSV
+
+From the repository root, after running `python dataset/preprocess.py`:
+
+```bash
+# Per-table train shards (for pMTM)
+python baselines/CM2/export_jsonl_to_csv.py --data_root data --mode train
+
+# Held-out CLS tables (for finetune splits)
+python baselines/CM2/export_jsonl_to_csv.py --data_root data --mode test
+```
+
+CSV files are written under `baselines/CM2/data/cleaned/`, mirroring `data/cleaned/` (e.g. `.../Movie/train/*.csv`, `.../Movie/test/WDC_movie_for_cls.csv`).
+
+### 2. pMTM pretraining (`mask_v1_movie_unsup` / `mask_v1_product_unsup`)
+
+`run_mask_pretrain_ds.py` expects **flat directories of `.csv` files** (one table per file). Copy or symlink exported train CSVs into pretrain folders, and use an empty labeled directory when training fully unsupervised:
+
+```bash
+cd baselines/CM2
+mkdir -p data/pretrain/movie_unsup data/pretrain/movie_labeled_empty
+cp data/cleaned/Movie/train/*.csv data/pretrain/movie_unsup/
+
+# Movie (single GPU; use --plain to avoid DeepSpeed on one GPU)
+CUDA_VISIBLE_DEVICES=0 python run_mask_pretrain_ds.py --plain \
+  --unlable_data_args data/pretrain/movie_unsup \
+  --lable_data_args data/pretrain/movie_labeled_empty \
+  --save_model ./mask_v1_movie_unsup \
+  --num_data 100 \
+  --num_epoch 2 \
+  --log_path ./logs/mask_v1_movie_unsup.txt
+```
+
+Repeat for Product (`data/pretrain/product_unsup`, `--save_model ./mask_v1_product_unsup`). Set `--num_data` to at least the number of tables loaded (see log: `all train data number:...`). Checkpoints are gitignored; downstream code defaults to `baselines/CM2/mask_v1_movie_unsup` and `mask_v1_product_unsup` (override with `CM2_MOVIE_CHECKPOINT` / `CM2_PRODUCT_CHECKPOINT`).
+
+Multi-GPU DeepSpeed (original CM2 recipe):
+
+```bash
+deepspeed --master_port 29400 --num_gpus=4 run_mask_pretrain_ds.py \
+  --deepspeed_config ds_config.json \
+  --unlable_data_args data/pretrain/movie_unsup \
+  --lable_data_args data/pretrain/movie_labeled_empty \
+  --save_model ./mask_v1_movie_unsup \
+  --num_data 100 \
+  --num_epoch 2
+```
+
+### 3. Optional: strict finetune splits for CM2 classifier
+
+```bash
+python baselines/CM2/prepare_wdc_finetune_splits.py --domain all
+```
+
+Writes leakage-free CSVs under `baselines/CM2/data/cleaned/{Movie,Product}/strict/`. Finetune with `run_finetune.py` from `baselines/CM2/`:
+
+```bash
+cd baselines/CM2
+CUDA_VISIBLE_DEVICES=0 python -u run_finetune.py \
+  --cpt ./mask_v1_movie_unsup \
+  --task_data ./data/cleaned/Movie/strict/WDC_movie_for_cls_finetune_train.csv \
+  --target genres \
+  --val_data ./data/cleaned/Movie/strict/WDC_movie_for_cls_finetune_val.csv \
+  --output_dir ./models/movie_finetune_strict
+```
+
+### 4. NAVI vs CM2 experiments (`experiments/`)
+
+Frozen CM2 encoder + sklearn row classification and imputation comparison (requires `mask_v1_*_unsup` checkpoints):
+
+```bash
+conda activate CM2
+./experiments/navi_cm2.sh [RUN_ID]
+```
+
+- Imputation plot: `experiments/navi_cm2_imputation_plot.py`
+- Row classification: `row_classification.py --mode cm2` (Movie and Product)
+- Optional: `SKIP_PLOT=1` or `SKIP_CM2_CLS=1` to skip stages
+
+Sweep finetuned CM2 epoch checkpoints:
+
+```bash
+bash experiments/downstream_tasks/run_cm2_finetune_epoch_sweep.sh all
+```
+
+Strict finetuned-classifier eval on held-out CSV (from `prepare_wdc_finetune_splits.py`):
+
+```bash
+python experiments/downstream_tasks/row_classification.py \
+  --mode cm2_finetune_strict_csv \
+  --domain Movie \
+  --cm2_checkpoint baselines/CM2/models/movie_finetune_strict/epoch_28 \
+  --cm2_pretrain_checkpoint baselines/CM2/mask_v1_movie_unsup \
+  --heldout_csv baselines/CM2/data/cleaned/Movie/strict/WDC_movie_for_cls_heldout_test.csv
+```
+
+---
 
 ## About our Work
 Tabular data --- also known as structured data --- pervades the landscape of the World Wide Web, playing a foundational role in the digital architecture that underpins online information. Given the recent influence of large-scale pre-trained models like ChatGPT and SAM across various domains, exploring the application of pretraining techniques for mining tabular data on the web has emerged as a highly promising research direction. 

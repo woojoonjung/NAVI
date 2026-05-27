@@ -12,57 +12,9 @@ conda env create -f environment.yml
 
 # Activate environment
 conda activate navi
-
-# Download spaCy model (required for preprocessing)
-python -m spacy download en_core_web_sm
-```
-
-### Verify Installation
-
-```bash
-# Test basic imports
-python -c "import torch; print(f'PyTorch: {torch.__version__}'); print(f'CUDA available: {torch.cuda.is_available()}')"
-
-# Test project imports
-python -c "from model.navi import NaviForMaskedLM; from dataset.dataset import NaviDataset; print('✓ Project imports successful')"
 ```
 
 ## Data Preparation
-
-### Reproducibility check: use verified-clean raw tables
-
-This copy is configured to read raw tables from:
-
-- `/home/work/Tabular-Embedding/data_corruption_debug/uploaded_unzipped_to_server/Movie_top100`
-- `/home/work/Tabular-Embedding/data_corruption_debug/uploaded_unzipped_to_server/Product_top100`
-
-and to write all derived artifacts under this directory:
-
-- `data/flattened/...`
-- `data/cleaned/...`
-
-Run preprocessing from this directory:
-
-```bash
-cd /home/work/Tabular-Embedding/navi_icml_reproducibility_check
-python dataset/preprocess.py
-```
-
-Then train (examples):
-
-```bash
-# NAVI (Movie)
-python training/train_navi.py --data_path data/cleaned/Movie/train --validation_dir data/cleaned/Movie/validation
-
-# NAVI (Product)
-python training/train_navi.py --data_path data/cleaned/Product/train --validation_dir data/cleaned/Product/validation
-
-# BERT baseline (Movie)
-python training/train_bert.py --data_path data/cleaned/Movie/train --validation_dir data/cleaned/Movie/validation
-
-# HAETAE baseline (Product)
-python baselines/haetae/train.py --data_path data/cleaned/Product/train --validation_dir data/cleaned/Product/validation
-```
 
 ### Download Datasets
 The datasets used for training are publicly available at Web Data Commons (`https://webdatacommons.org/structureddata/schemaorgtables/2023/`).
@@ -89,143 +41,78 @@ data/
     ├── Product_top100/            # Cleaned per-table Product data
     ├── Movie/
     │   ├── train/                 # 80% split per cleaned Movie table
-    │   └── validation/            # 10% split per cleaned Movie table
-    ├── Product/
-    │   ├── train/                 # 80% split per cleaned Product table
-    │   └── validation/            # 10% split per cleaned Product table
-    └── test/
-        ├── WDC_movie_for_mp.jsonl
-        ├── WDC_movie_for_cls.jsonl
-        ├── WDC_product_for_mp.jsonl
-        └── WDC_product_for_cls.jsonl
+    │   ├── validation/            # 10% split per cleaned Movie table
+    │   └── test/
+    │       ├── WDC_movie_for_mp.jsonl
+    │       └── WDC_movie_for_cls.jsonl
+    └── Product/
+        ├── train/                 # 80% split per cleaned Product table
+        ├── validation/            # 10% split per cleaned Product table
+        └── test/
+            ├── WDC_product_for_mp.jsonl
+            └── WDC_product_for_cls.jsonl
 ```
 
 ### Preprocessing
 
-The unified preprocessing pipeline in `dataset/preprocess.py` follows a 5-step workflow:
-
-#### Step 1: Stratified Resize of Product Dataset
-- Counts total rows across all raw Product tables under `data/raw/Product_top100`.
-- Computes a global sampling ratio so the total Product rows approximately match the Movie total (default target: **480,817**).
-- Rewrites each raw Product table in-place with a random, deterministic subset of rows.
-
-#### Step 2: Flatten Both Datasets
-- Reads raw Movie/Product tables from `data/raw/...`.
-- Flattens nested JSON structures into flat key–value maps.
-- Writes flattened tables to:
-  - `data/flattened/Movie_top100`
-  - `data/flattened/Product_top100`
-
-#### Step 3: Clean Flattened Datasets
-- Applies language filtering (keeps primarily English tables).
-- Ensures BERT tokenizability, truncates overly long fields, and subsamples indexed fields.
-- Writes cleaned per-table data to:
-  - `data/cleaned/Movie_top100`
-  - `data/cleaned/Product_top100`
-
-#### Step 4: Create Train / Validation / Test Splits
-- For each cleaned table (Movie and Product):
-  - Shuffles rows with a fixed random seed.
-  - Splits into **80% train**, **10% validation**, **10% test**.
-- Writes per-table train/validation splits to:
-  - `data/cleaned/Movie/train`, `data/cleaned/Movie/validation`
-  - `data/cleaned/Product/train`, `data/cleaned/Product/validation`
-- Aggregates the remaining 10% test rows in memory for heldout file creation.
-
-#### Step 5: Create Heldout Datasets (MP / CLS)
-- From the aggregated Movie test rows:
-  - `WDC_movie_for_mp.jsonl`: all Movie test rows (for masked prediction).
-  - `WDC_movie_for_cls.jsonl`: Movie test rows with a unified non-empty `genres` field.
-- From the aggregated Product test rows:
-  - `WDC_product_for_mp.jsonl`: all Product test rows (for masked prediction).
-  - `WDC_product_for_cls.jsonl`: Product test rows with a unified non-empty `category` field.
-- All four files are written to `data/cleaned/test/`.
-
 ```bash
-# Run with default settings
 python dataset/preprocess.py
-
-# Run with custom settings
-python dataset/preprocess.py \
-    --raw_movie_dir data/raw/Movie_top100 \
-    --raw_product_dir data/raw/Product_top100 \
-    --flattened_movie_dir data/flattened/Movie_top100 \
-    --flattened_product_dir data/flattened/Product_top100 \
-    --cleaned_movie_dir data/cleaned/Movie_top100 \
-    --cleaned_product_dir data/cleaned/Product_top100 \
-    --target_product_rows 480817 \
-    --train_ratio 0.8 \
-    --val_ratio 0.1 \
-    --seed 42
 ```
-
 
 ## Usage
 
-### Training Models
+### Training
+
+Pretrain on the Movie domain (swap `Movie` → `Product` in paths and `*_movie` → `*_product` in output dirs for Product). Checkpoints at `epoch_2` are used by downstream experiments (`config.CHECKPOINT_EPOCH`).
 
 ```bash
-# Train Navi models (Default setting, hyperparam variants, ablations)
-bash pretrain_navi.sh
+python training/train_bert.py \
+  --data_path data/cleaned/Movie/train \
+  --validation_dir data/cleaned/Movie/validation \
+  --output_dir models/bert_movie \
+  --num_epochs 2
 
-# Train baseline models (BERT, TAPAS, HAETAE)
-bash pretrain_baselines.sh
+python training/train_navi.py \
+  --data_path data/cleaned/Movie/train \
+  --validation_dir data/cleaned/Movie/validation \
+  --output_dir models/navi_movie \
+  --masking_strategy HVB \
+  --ablation_type full \
+  --num_epochs 2
+
+python training/train_tapas.py \
+  --data_path data/cleaned/Movie/train \
+  --validation_dir data/cleaned/Movie/validation \
+  --output_dir models/tapas_movie \
+  --num_epochs 2
+
+python baselines/haetae/train.py \
+  --data_path data/cleaned/Movie/train \
+  --validation_dir data/cleaned/Movie/validation \
+  --output_dir models/haetae_movie \
+  --num_epochs 2
 ```
 
 ### Experiments
 
-The experiments are organized into task-specific subdirectories:
-
-```text
-experiments/
-├── masked_prediction/          # Masked prediction evaluation
-├── downstream_tasks/          # Row classification tasks
-├── robustness_analysis/        # Robustness to perturbations
-├── header_clustering/          # Header clustering evaluation
-└── visualization/              # Embedding visualization
-```
-
 #### Masked Prediction
 ```bash
-# Using the convenience script
-./experiments/run_masked_prediction.sh Movie baselines
-./experiments/run_masked_prediction.sh Product baselines
-
-# Or directly
 python experiments/masked_prediction/masked_prediction.py --model baselines --domain Movie
 python experiments/masked_prediction/masked_prediction.py --model baselines --domain Product
 ```
 
 #### Row Classification
 ```bash
-# Using the convenience script
-./experiments/run_classification.sh lm_encoders Movie cls
-./experiments/run_classification.sh fe_pipelines Product meanpooled
-./experiments/run_classification.sh ablations Movie cls
-
-# Or directly
 python experiments/downstream_tasks/row_classification.py --mode lm_encoders --domain Movie --embedding_type cls
 python experiments/downstream_tasks/row_classification.py --mode fe_pipelines --domain Product --embedding_type meanpooled
 python experiments/downstream_tasks/row_classification.py --mode ablations --domain Movie --embedding_type cls
 ```
 
-**Modes:**
-- `lm_encoders`: Language model encoders (BERT, TAPAS, HAETAE, NAVI)
-- `fe_pipelines`: Feature engineering pipelines (TableVectorizer, NAVI_concat)
-- `ablations`: Ablation studies (wo_PER, wo_MSM, wo_ESA, wo_GHA, wo_GHC)
-
 #### Header Clustering
 
-*Prerequisites*: Canonical sets are prepared in `artifacts/lexvar/`. You can generate them using:
-```bash
-python experiments/header_clustering/get_canonical_sets.py
-```
+*Prerequisites*: Canonical sets are prepared in `artifacts/lexvar/`.
 
 ```bash
-# Run complete pipeline
-./experiments/run_header_clustering.sh
-
-# Run individual steps
 python experiments/header_clustering/get_header_embeddings.py \
     --data_dir data \
     --artifacts_dir artifacts/lexvar \
@@ -241,41 +128,24 @@ python experiments/header_clustering/header_clustering.py \
 #### Robustness Analysis
 
 ```bash
-# Using the convenience script
-./experiments/run_robustness_analysis.sh
-
-# Or directly
 python experiments/robustness_analysis/robustness_exp.py
-
-# Run on specific domains
 python experiments/robustness_analysis/robustness_exp.py --domains cleaned/Movie
 python experiments/robustness_analysis/robustness_exp.py --domains cleaned/Product
-
-# Run specific models only
-python experiments/robustness_analysis/robustness_exp.py --models bert tapas haetae navi
-python experiments/robustness_analysis/robustness_exp.py --models woPER woMSM woESA woGHA woGHC
 ```
 
 **Creating Schema Noise Datasets:**
 ```bash
-# Create variant datasets with schema perturbations
 python experiments/robustness_analysis/create_schema_noise_datasets.py \
     --domain Movie \
     --synonym_map artifacts/schema_noise/synonym_map.json
 ```
 
-Results are saved to `experiments/robustness_analysis/robustness_results/`:
-
 #### Segment Visualization
 ```bash
-# Run complete visualization pipeline
-./experiments/run_segment_visualization.sh
-
-# Run individual steps
 python experiments/visualization/get_segment_embeddings.py \
     --model_path ./models/navi_movie/epoch_2 \
     --output_path ./artifacts/segment_visualization/segments \
-    --n_tables 6 \
+    --n_tables 5 \
     --rows_per_table 169 \
     --random_state 42
 
@@ -289,11 +159,3 @@ python experiments/visualization/plot_segments.py \
     --seed 42 \
     --preprocessing l2_normalize
 ```
-
-#### Output Locations
-
-- **Masked Prediction**: Console output with accuracy scores
-- **Row Classification**: Console output with F1 scores
-- **Header Clustering**: `artifacts/lexvar/` directory
-- **Robustness Analysis**: `experiments/robustness_analysis/robustness_results/` directory
-- **Segment Visualization**: `artifacts/segment_visualization/` directory

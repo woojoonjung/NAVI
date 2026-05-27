@@ -731,7 +731,7 @@ def load_ablation_models(tokenizer):
     models = {}
     bconfig = BertConfig.from_pretrained(_bert_name, **_bert_kw)
     domains = ['movie', 'product']
-    ablation_values = ['woSSI', 'woMSM', 'woESA', 'woGHA', 'woGHC']
+    ablation_values = ['woGHA', 'woMSM', 'woESA']
 
     for domain in domains:
         for ablation in ablation_values:
@@ -989,8 +989,7 @@ def evaluate_baselines(data, target_col, models, domain, n_runs=8, embedding_typ
     print(f"\n{domain} - Baselines")
     
     results = {}
-    # Skip TabPFN in hyperparameter sweeps to avoid gated-model auth failures.
-    ml_models = ["xgboost"]
+    ml_models = ["xgboost", "lr", "tabpfn"]
     
     # BERT
     print("\nBERT")
@@ -1077,7 +1076,7 @@ def evaluate_cm2(
     print(f"\n{domain} - CM2 frozen row embeddings")
 
     results: dict = {}
-    ml_models = ["xgboost", "catboost", "lr"]
+    ml_models = ["tabpfn"]
 
     try:
         if cm2_checkpoint:
@@ -1130,22 +1129,32 @@ def evaluate_cm2(
     return results
 
 def evaluate_ablations(data, target_col, models, domain, n_runs=8, embedding_type="cls"):
-    """Evaluate ablation models"""
+    """Evaluate selected ablation models."""
     print(f"\n{domain} - Ablations")
     
     results = {}
-    ml_models = ["xgboost", "catboost", "lr", "tabpfn"]
-    
-    # Filter models for this domain (include exact navi_{domain} and names containing _{domain}_)
+    ml_models = ["xgboost", "lr", "tabpfn"]
     domain_lower = domain.lower()
-    domain_models = {k: v for k, v in models.items() if k == f'navi_{domain_lower}' or f"_{domain_lower}_" in k}
+    target_model_names = [
+        f"navi_{domain_lower}_woGHA",
+        f"navi_{domain_lower}_woMSM",
+        f"navi_{domain_lower}_woESA",
+    ]
+    missing = [name for name in target_model_names if name not in models]
+    for name in missing:
+        print(f"⚠️  Skipping missing model: {name}")
+    domain_models = {
+        name: models[name]
+        for name in target_model_names
+        if name in models
+    }
     
     for model_name, model in domain_models.items():
         print(f"\n{model_name}")
         results[model_name] = {}
         for ml_model in ml_models:
             result = run_repeated_classification(
-                data, target_col, model, model_name, domain, 
+                data, target_col, model, model_name, domain,
                 ml_model=ml_model, n_runs=n_runs, embedding_type=embedding_type
             )
             results[model_name][f"{ml_model}_{domain}"] = result
@@ -1158,7 +1167,7 @@ def evaluate_navi_hyperparam_sweep(
     """Evaluate all `./models/navi_{domain}` and `./models/navi_{domain}_*` checkpoints for this domain."""
     print(f"\n{domain} - NAVI hyperparameter sweep (max_loaded_variants={max_loaded_variants})")
     results = {}
-    ml_models = ["xgboost", "catboost", "lr", "tabpfn"]
+    ml_models = ["xgboost", "lr", "tabpfn"]
     domain_key = domain.lower()
     discovered = discover_navi_domain_model_dirs(domain)
     pending = []
@@ -1207,7 +1216,7 @@ def evaluate_navi_embeddings(data, target_col, tokenizer, domain, n_runs=8, embe
     print(f"\n{domain} - NAVI Embeddings")
     
     results = {}
-    ml_models = ["xgboost", "catboost", "lr", "tabpfn"]
+    ml_models = ["xgboost", "lr", "tabpfn"]
     
     # Load NAVI model
     models = load_navi_models(tokenizer)
@@ -1242,7 +1251,7 @@ def evaluate_tablevectorizer(
     print(f"\n{domain} - TableVectorizer + {enc_label}")
 
     results = {}
-    ml_models = ["xgboost", "catboost", "lr", "tabpfn"]
+    ml_models = ["xgboost", "lr", "tabpfn"]
 
     # Extract features using TableVectorizer
     print(f"Extracting features with TableVectorizer (high_cardinality={high_cardinality_encoder})...")
@@ -1337,7 +1346,7 @@ def evaluate_raw_features(data, target_col, domain, n_runs=8):
     print(f"\n{domain} - Raw Features")
     
     results = {}
-    ml_models = ["xgboost", "catboost", "lr", "tabpfn"]
+    ml_models = ["xgboost", "lr", "tabpfn"]
     
     # Extract raw features
     print("Extracting raw features...")
@@ -1361,7 +1370,7 @@ def evaluate_concatenated_navi(data, target_col, tokenizer, domain, n_runs=8, em
     print(f"\n{domain} - Concatenated NAVI + Numerical Features")
     
     results = {}
-    ml_models = ["xgboost", "catboost", "lr", "tabpfn"]
+    ml_models = ["xgboost", "lr", "tabpfn"]
     
     # Load NAVI model from baseline models
     models = load_baseline_models(tokenizer)
@@ -1428,7 +1437,7 @@ def evaluate_rebuttal(
     print(f"\n{domain} - Rebuttal Models")
     
     results = {}
-    ml_models = ["xgboost", "catboost", "lr", "tabpfn"]
+    ml_models = ["xgboost", "lr", "tabpfn"]
     
     # # Load rebuttal models
     # models = load_navi_models(tokenizer)
@@ -1488,7 +1497,7 @@ def evaluate_navi(data, target_col, tokenizer, domain, n_runs=8, embedding_type=
     print(f"\n{domain} - NAVI Models")
     
     results = {}
-    ml_models = ["xgboost", "catboost", "lr", "tabpfn"]
+    ml_models = ["xgboost", "lr", "tabpfn"]
     
     # Load NAVI models
     models = load_navi_models(tokenizer)
@@ -1671,7 +1680,7 @@ def evaluate_with_seed_variance(data, target_col, tokenizer, domain, seeds=[0, 1
     print(f"{'='*80}\n")
     
     all_seed_results = {}
-    ml_models = ["xgboost", "catboost", "lr", "tabpfn"]
+    ml_models = ["xgboost", "lr", "tabpfn"]
     
     for seed in seeds:
         print(f"\n{'='*60}")
@@ -2086,22 +2095,34 @@ def main():
     if args.mode == 'lm_encoders':
         # Language model encoders: bert, tapas, haetae, navi
         models = load_baseline_models(tokenizer)
-        results = evaluate_baselines(data, target_col, models, args.domain.lower(), embedding_type=args.embedding_type)
+        # results = evaluate_baselines(data, target_col, models, args.domain.lower(), embedding_type=args.embedding_type)
+        results = evaluate_navi(
+            data,
+            target_col,
+            tokenizer,
+            args.domain.lower(),
+            embedding_type=args.embedding_type,
+        )
         
     elif args.mode == 'fe_pipelines':
         # Feature engineering pipelines: tablevectorizer, navi_concat
-        tablevectorizer_results = evaluate_tablevectorizer(
+        # tablevectorizer_results = evaluate_tablevectorizer(
+        #     data,
+        #     target_col,
+        #     args.domain.lower(),
+        #     high_cardinality_encoder=args.tablevectorizer_encoder,
+        # )
+        # results.update(tablevectorizer_results)
+        
+        # concat_results = evaluate_concatenated_navi(
+        #     data, target_col, tokenizer, args.domain.lower(), embedding_type=args.embedding_type
+        # )
+        # results.update(concat_results)
+        results = evaluate_raw_features(
             data,
             target_col,
             args.domain.lower(),
-            high_cardinality_encoder=args.tablevectorizer_encoder,
         )
-        results.update(tablevectorizer_results)
-        
-        concat_results = evaluate_concatenated_navi(
-            data, target_col, tokenizer, args.domain.lower(), embedding_type=args.embedding_type
-        )
-        results.update(concat_results)
         
     elif args.mode == 'ablations':
         # Ablations: wo_PER, wo_MSM, wo_ESA, wo_GHA, wo_GHC
