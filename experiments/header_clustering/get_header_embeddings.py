@@ -22,7 +22,7 @@ from model.navi import NaviForMaskedLM
 from dataset.dataset import NaviDataset, BertDataset, TapasDataset, HaetaeDataset
 
 # Utils
-from experiments.header_clustering.utils import extract_header_value_embeddings_from_positions, flatten_nested_canonical_map
+from experiments.header_clustering.clt_utils import extract_header_value_embeddings_from_positions, flatten_nested_canonical_map
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 

@@ -1,10 +1,24 @@
-# NAVI
+<div align="center">
 
-This repository contains the implementation of NAVI; Entropy-aware Alignment with Header-Value Induction.
+# Segment-driven Structural Induction and Semantic Alignment for Heterogeneous Tabular Representation
+  
+[![Paper](https://img.shields.io/badge/Paper-ICML%202026-blue)](https://icml.cc/) [![Paper](https://img.shields.io/badge/Paper-ArXiv-red)](https://arxiv.org/abs/2606.01890)
 
-## Quick Setup
+</div>
 
-### Environment Setup
+Official implementation of **NAVI**, a dual-context pretraining framework for heterogeneous in-domain table representation learning.
+
+<p align="center">
+  <a href="NAVI.png">
+    <img src="NAVI.png" width="600" />
+  </a>
+</p>
+
+NAVI learns domain-specialized attribute semantics by jointly aggregating two complementary sources of evidence:
+1) **Schema Context**: structural evidence from co-occurring attributes within a table schema, captured through masked reconstruction over header–value pairs.
+2) **Column Context**: distributional evidence from all corresponding values in a table, captured through column-entropy-guided contrastive alignment.
+
+## Environment Setup
 
 ```bash
 # Create conda environment from specification
